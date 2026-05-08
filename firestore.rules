@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Students can only read/write their own session data
+    match /sessions/{sessionId} {
+      // request.auth.uid is the custom token's UID (which is studentId)
+      allow read, write: if request.auth != null && request.auth.uid == resource.data.studentId;
+      // Allow create if they are setting themselves as the studentId
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.studentId;
+    }
+
+    // Students can read/update their own profile
+    match /students/{studentId} {
+      allow read, write: if request.auth != null && request.auth.uid == studentId;
+    }
+  }
+}

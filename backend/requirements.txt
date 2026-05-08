@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+firebase-admin
+requests
+python-dotenv
+python-multipart
+google-generativeai
+openai
+nvidia-riva-client
