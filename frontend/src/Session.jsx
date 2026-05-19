@@ -22,6 +22,8 @@ function Session({ student, onViewDashboard, onSessionComplete }) {
   const isPlayingRef = useRef(false);
   const currentAudioRef = useRef(null);
   const isAiTurnDoneRef = useRef(true);
+  const transcriptBufferRef = useRef([]);
+  const silenceTimerRef = useRef(null);
 
   const recognitionRef = useRef(null);
 
@@ -53,9 +55,25 @@ function Session({ student, onViewDashboard, onSessionComplete }) {
       recognition.onresult = (event) => {
          for (let i = event.resultIndex; i < event.results.length; ++i) {
            if (event.results[i].isFinal) {
-             const transcript = event.results[i][0].transcript;
-             console.log("[SpeechRecognition] Final Transcript:", transcript);
-             handleSpeechEnd(transcript);
+             const transcriptChunk = event.results[i][0].transcript.trim();
+             if (transcriptChunk) {
+               transcriptBufferRef.current.push(transcriptChunk);
+             }
+             
+             // Clear existing timer
+             if (silenceTimerRef.current) {
+               clearTimeout(silenceTimerRef.current);
+             }
+             
+             // Wait 2.5 seconds for any further speech before finalizing the turn
+             silenceTimerRef.current = setTimeout(() => {
+               const fullPhrase = transcriptBufferRef.current.join(' ');
+               transcriptBufferRef.current = [];
+               if (fullPhrase) {
+                 handleSpeechEnd(fullPhrase);
+               }
+             }, 2500);
+             
            } else {
              // Optional: could show interim results on screen
              if (vadStateRef.current === 'LISTENING') {
@@ -68,7 +86,7 @@ function Session({ student, onViewDashboard, onSessionComplete }) {
       recognition.onend = () => {
          console.log("[SpeechRecognition] onend fired, vadState is", vadStateRef.current);
          // Only restart if we intentionally want to keep listening
-         if (vadStateRef.current === 'LISTENING') {
+         if (vadStateRef.current === 'LISTENING' || vadStateRef.current === 'SPEAKING') {
              setTimeout(() => {
                  try { recognition.start(); } catch (e) { console.error("Error restarting:", e); }
              }, 500);
@@ -82,7 +100,6 @@ function Session({ student, onViewDashboard, onSessionComplete }) {
             updateVadState('IDLE');
             setIsSessionActive(false);
          }
-         // no-speech usually triggers onend right after, which will handle the restart
       };
       
       recognitionRef.current = recognition;
@@ -109,6 +126,12 @@ function Session({ student, onViewDashboard, onSessionComplete }) {
   };
 
   const stopMedia = () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    transcriptBufferRef.current = [];
+    
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch(e) {}
     }
