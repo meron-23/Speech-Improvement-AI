@@ -56,6 +56,10 @@ function App() {
             <Session 
               student={student} 
               onViewDashboard={() => setCurrentView('DASHBOARD')}
+              onSessionComplete={(updatedStudent) => {
+                setStudent(updatedStudent);
+                localStorage.setItem('speech_ai_student', JSON.stringify(updatedStudent));
+              }}
             />
           )}
 

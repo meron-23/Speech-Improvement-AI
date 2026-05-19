@@ -1,4 +1,5 @@
 import React from 'react';
+import { Home, FileText, BarChart2, BookOpen, Settings, LogOut, ChevronDown, Mic } from 'lucide-react';
 
 function Layout({ student, currentView, setCurrentView, onLogout, children }) {
   return (
@@ -6,10 +7,14 @@ function Layout({ student, currentView, setCurrentView, onLogout, children }) {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h2>Speech AI</h2>
-          <div className="user-card">
-            <span className="user-name">{student.name}</span>
-            <span className="user-level">{student.cefrLevel} Level</span>
+          <div className="logo-container">
+            <div className="logo-icon">
+              <span style={{ position: 'relative', top: '-1px' }}>Y</span>
+            </div>
+            <div className="logo-text">
+              <span className="logo-title">Yimaru</span>
+              <span className="logo-subtitle">Academy</span>
+            </div>
           </div>
         </div>
 
@@ -18,24 +23,48 @@ function Layout({ student, currentView, setCurrentView, onLogout, children }) {
             className={`nav-item ${currentView === 'DASHBOARD' ? 'active' : ''}`}
             onClick={() => setCurrentView('DASHBOARD')}
           >
-            Dashboard
+            <Home size={20} className="nav-icon" />
+            Home
           </button>
           <button 
             className={`nav-item ${currentView === 'SESSION' ? 'active' : ''}`}
             onClick={() => setCurrentView('SESSION')}
           >
-            Practice Session
+            <Mic size={20} className="nav-icon" />
+            Practice
           </button>
           <button 
             className={`nav-item ${currentView === 'HISTORY' ? 'active' : ''}`}
             onClick={() => setCurrentView('HISTORY')}
           >
-            Session History
+            <FileText size={20} className="nav-icon" />
+            Sessions
+          </button>
+          <button className="nav-item inactive">
+            <BarChart2 size={20} className="nav-icon" />
+            Progress
+          </button>
+          <button className="nav-item inactive">
+            <BookOpen size={20} className="nav-icon" />
+            Vocabulary
+          </button>
+          <button className="nav-item inactive">
+            <Settings size={20} className="nav-icon" />
+            Settings
           </button>
         </nav>
 
         <div className="sidebar-footer">
+          <div className="user-profile-bottom">
+            <img src="/alice_avatar.png" alt="User Avatar" className="user-avatar" />
+            <div className="user-info-bottom">
+              <span className="user-name-bottom">{student.name}</span>
+              <span className="user-level-bottom">{student.cefrLevel} Level</span>
+            </div>
+            <ChevronDown size={16} className="user-chevron" />
+          </div>
           <button className="nav-item logout-btn" onClick={onLogout}>
+            <LogOut size={20} className="nav-icon" />
             Logout
           </button>
         </div>

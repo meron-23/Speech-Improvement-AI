@@ -36,24 +36,47 @@ function History({ student, onBack }) {
       <div style={{ width: '100%' }}>
         <div className="section-header">
           <div>
-            <h2 style={{ fontSize: '2rem', fontWeight: '800' }}>Session Analysis</h2>
-            <p style={{ color: 'var(--text-muted)' }}>Review your performance from {new Date(selectedSession.timestamp).toLocaleDateString()}.</p>
+            <h2 style={{ fontSize: '2.5rem', fontWeight: '800', marginBottom: '0.5rem' }}>Session Analysis</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>Review your performance from {new Date(selectedSession.timestamp).toLocaleDateString()}.</p>
           </div>
-          <button className="nav-item" onClick={() => setSelectedSession(null)} style={{ width: 'auto', background: '#f1f5f9', color: 'var(--text-main)' }}>
+          <button className="nav-item" onClick={() => setSelectedSession(null)} style={{ width: 'auto', background: '#f1f5f9', color: 'var(--text-main)', padding: '10px 24px' }}>
             Back to History
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-          <div className="card" style={{ background: 'white' }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '1.5rem' }}>Full Conversation</h3>
-            <div style={{ maxHeight: '500px', overflowY: 'auto', paddingRight: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2.5rem' }}>
+          <div className="card" style={{ background: 'white', padding: '2rem' }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '2rem', textAlign: 'center', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Full Conversation</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {selectedSession.conversation && selectedSession.conversation.map((msg, idx) => (
-                <div key={idx} style={{ marginBottom: '1.5rem' }}>
-                   <div style={{ fontSize: '0.75rem', fontWeight: '800', textTransform: 'uppercase', color: msg.role === 'user' ? 'var(--primary)' : 'var(--accent)', marginBottom: '0.25rem' }}>
+                <div key={idx} style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column',
+                  alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start'
+                }}>
+                   <div style={{ 
+                     fontSize: '0.7rem', 
+                     fontWeight: '800', 
+                     textTransform: 'uppercase', 
+                     color: 'var(--text-muted)', 
+                     marginBottom: '0.25rem',
+                     marginRight: msg.role === 'user' ? '0.5rem' : '0',
+                     marginLeft: msg.role === 'ai' ? '0.5rem' : '0'
+                   }}>
                      {msg.role === 'user' ? 'You' : 'AI Partner'}
                    </div>
-                   <div style={{ fontSize: '1rem', lineHeight: '1.6', color: 'var(--text-main)' }}>
+                   <div style={{ 
+                     padding: '12px 18px',
+                     borderRadius: '18px',
+                     fontSize: '0.95rem',
+                     lineHeight: '1.5',
+                     maxWidth: '85%',
+                     backgroundColor: msg.role === 'user' ? 'var(--primary)' : '#f1f5f9',
+                     color: msg.role === 'user' ? 'white' : 'var(--text-main)',
+                     borderBottomRightRadius: msg.role === 'user' ? '4px' : '18px',
+                     borderBottomLeftRadius: msg.role === 'ai' ? '4px' : '18px',
+                     boxShadow: msg.role === 'user' ? '0 4px 12px rgba(158, 40, 145, 0.2)' : 'none'
+                   }}>
                      {msg.text}
                    </div>
                 </div>
@@ -61,10 +84,61 @@ function History({ student, onBack }) {
             </div>
           </div>
 
-          <div className="card" style={{ background: 'linear-gradient(135deg, #fff 0%, #fffbf2 100%)', border: '1px solid rgba(229, 169, 53, 0.2)' }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '1.5rem', color: 'var(--accent)' }}>AI Feedback</h3>
-            <div style={{ fontSize: '1.05rem', lineHeight: '1.7', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>
-              {selectedSession.feedback}
+          <div className="card" style={{ background: 'white', padding: '2rem' }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '2rem', textAlign: 'center', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>AI Mission Report</h3>
+            <div className="feedback-grid" style={{ 
+              display: 'grid', 
+              gap: '1.25rem',
+            }}>
+              {(() => {
+                const cleanFeedback = (selectedSession.feedback || "")
+                  .replace(/#{1,6}\s?/g, '') // Remove ### headers
+                  .replace(/>{1,2}\s?/g, '') // Remove >> blockquotes
+                  .replace(/\*\*/g, '')      // Remove ** bold
+                  .replace(/\*/g, '')        // Remove * bullets
+                  .trim();
+
+                let sections = cleanFeedback.split(/(?=🌟|🛠️|🔥)/);
+                if (sections.length <= 1 && cleanFeedback.includes('\n\n')) {
+                  sections = cleanFeedback.split('\n\n');
+                }
+
+                return sections.map((section, idx) => {
+                  if (!section.trim()) return null;
+                  const isStrength = section.includes('🌟') || idx === 0;
+                  const isFix = section.includes('🛠️') || idx === 1;
+                  const isChallenge = section.includes('🔥') || idx >= 2;
+                  
+                  let bgColor = '#f8fafc';
+                  let borderColor = '#e2e8f0';
+                  let iconColor = '#64748b';
+                  
+                  if (isStrength) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; iconColor = '#16a34a'; }
+                  if (isFix) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; iconColor = '#d97706'; }
+                  if (isChallenge) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; iconColor = '#2563eb'; }
+
+                  const title = section.includes(':') ? section.split(':')[0] : (isStrength ? '🌟 Strengths' : (isFix ? '🛠️ Quick Fixes' : '🔥 Next Mission'));
+                  const content = section.includes(':') ? section.split(':').slice(1).join(':').trim() : section.trim();
+
+                  return (
+                    <div key={idx} style={{ 
+                      backgroundColor: bgColor, 
+                      padding: '1.25rem', 
+                      borderRadius: '16px', 
+                      border: `1px solid ${borderColor}`,
+                      fontSize: '0.95rem',
+                      lineHeight: '1.6'
+                    }}>
+                      <div style={{ fontWeight: '800', color: iconColor, marginBottom: '0.5rem', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {title}
+                      </div>
+                      <div style={{ color: '#334155', whiteSpace: 'pre-wrap' }}>
+                        {content}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
         </div>

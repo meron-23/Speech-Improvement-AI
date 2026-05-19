@@ -31,9 +31,7 @@ function Login({ onLogin }) {
       // await signInWithCustomToken(auth, data.token);
       
       onLogin({
-        studentId: data.student.studentId,
-        name: data.student.name,
-        cefrLevel: data.student.cefrLevel,
+        ...data.student,
         token: data.token
       });
 
@@ -74,7 +72,22 @@ function Login({ onLogin }) {
                 style={{ marginBottom: '0.5rem' }}
                 required
               />
-              {error && <div className="error-text" style={{ marginTop: '0.5rem' }}>{error}</div>}
+              {error && (
+                <div className="error-text" style={{ 
+                  marginTop: '0.75rem', 
+                  padding: '10px 14px', 
+                  backgroundColor: '#fef2f2', 
+                  border: '1px solid #fee2e2', 
+                  borderRadius: '8px',
+                  fontSize: '0.85rem',
+                  color: '#dc2626',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '1rem' }}>⚠️</span> {error}
+                </div>
+              )}
             </div>
             
             <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', borderRadius: '12px' }}>

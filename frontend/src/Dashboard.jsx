@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import API_BASE_URL from './config';
+import { Flame, CheckCircle2, ArrowRight } from 'lucide-react';
 
 function Dashboard({ student, onNewSession, onViewHistory }) {
   const [recentSessions, setRecentSessions] = useState([]);
@@ -11,7 +12,6 @@ function Dashboard({ student, onNewSession, onViewHistory }) {
         const res = await fetch(`${API_BASE_URL}/sessions?studentId=${student.studentId}`);
         if (res.ok) {
           const data = await res.json();
-          // Sort by timestamp descending and take up to 5
           const sorted = (data.sessions || [])
             .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
             .slice(0, 5);
@@ -26,75 +26,89 @@ function Dashboard({ student, onNewSession, onViewHistory }) {
     fetchRecentSessions();
   }, [student.studentId]);
 
+  // Example greeting based on time of day
+  const hour = new Date().getHours();
+  const greetingTime = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+
   return (
     <div style={{ width: '100%' }}>
-      <div className="section-header" style={{ alignItems: 'flex-start', flexDirection: 'column' }}>
-        <h2 style={{ fontSize: '2.5rem', marginBottom: '0.5rem', fontWeight: '800' }}>Welcome back, {student.name}!</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>Ready to master your English speaking today?</p>
+      {/* Greeting Section */}
+      <div className="dashboard-greeting">
+        <h2>Good {greetingTime}, {student.name.split(' ')[0]}! 👋</h2>
+        <p>Let's practice speaking and build your confidence.</p>
       </div>
 
-      <div className="stats-grid">
-        <div className="stat-card">
-          <span className="stat-label">Total Sessions</span>
-          <span className="stat-value">{recentSessions.length > 0 ? recentSessions.length + "+" : "0"}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">CEFR Level</span>
-          <span className="stat-value" style={{ color: 'var(--primary)' }}>{student.cefrLevel}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Practice Streak</span>
-          <span className="stat-value">3 Days</span>
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: '2.5rem', marginBottom: '3rem', background: 'linear-gradient(135deg, var(--primary) 0%, #7c1e72 100%)', border: 'none', display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ color: 'white' }}>
-          <h3 style={{ color: 'white', background: 'none', fontSize: '1.5rem', marginBottom: '0.5rem' }}>Start a New Session</h3>
-          <p style={{ opacity: '0.9', marginBottom: '0' }}>Have a 10-minute conversation with your AI partner.</p>
-        </div>
-        <button onClick={onNewSession} style={{ background: 'white', color: 'var(--primary)', padding: '1rem 2rem' }}>
-          Launch AI Partner
-        </button>
-      </div>
-
-      <div>
-        <div className="section-header">
-          <h3 style={{ fontSize: '1.5rem', fontWeight: '700' }}>Recent Activity</h3>
-          <button onClick={onViewHistory} className="nav-item" style={{ width: 'auto', padding: '8px 16px', fontSize: '0.9rem' }}>
-            View Full History
-          </button>
-        </div>
-
-        {loading ? (
-          <p style={{ color: 'var(--text-muted)' }}>Loading recent sessions...</p>
-        ) : recentSessions.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', padding: '4rem 1rem', border: '2px dashed rgba(0,0,0,0.05)', boxShadow: 'none', background: 'transparent' }}>
-            <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>No recent sessions found. Start your first session above!</p>
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gap: '1.5rem', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-            {recentSessions.map((session) => (
-              <div key={session.id} className="stat-card" style={{ cursor: 'pointer', transition: 'all 0.2s' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                  <div className="badge badge-primary">
-                    {new Date(session.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                  </div>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    {new Date(session.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
-                <div style={{ fontWeight: '700', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
-                  Conversation Session
-                </div>
-                <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  {session.conversation?.length || 0} messages • Click to review
-                </div>
+      {/* Hero Mission Card */}
+      {student.currentLesson && (
+        <div className="hero-mission-card">
+          <div className="hero-mission-content">
+            <div className="hero-mission-header">
+              <div className="hero-mission-icon">
+                <span role="img" aria-label="Restaurant">🍽️</span>
               </div>
-            ))}
+              <div className="hero-mission-titles">
+                <span className="hero-mission-subtitle">Today's Mission</span>
+                <h3 className="hero-mission-title">{student.currentLesson.title}</h3>
+              </div>
+            </div>
+
+            <div className="hero-mission-badges">
+              <span className="hero-badge">⏱️ 20-25 mins</span>
+              <span className="hero-badge">📊 {student.currentLesson.cefrLevel} Level</span>
+              <span className="hero-badge">📖 3 Vocabulary Words</span>
+            </div>
+
+            <p className="hero-mission-desc">
+              {student.currentLesson.objective || 'Practice speaking naturally and building confidence in real-world scenarios.'}
+            </p>
+
+            <button className="hero-start-btn" onClick={onNewSession}>
+              Start Session <ArrowRight size={18} />
+            </button>
           </div>
-        )}
+          
+          <div className="hero-mission-illustration">
+            <img src="/mission_illustration.png" alt="Mission Illustration" />
+          </div>
+        </div>
+      )}
+
+      {/* Stats Row */}
+      <div className="dashboard-stats-row">
+        <div className="dashboard-stat-card">
+          <div className="stat-icon-wrapper fire">
+            <Flame size={24} color="#f97316" />
+          </div>
+          <div className="stat-info">
+            <span className="stat-value">{student.practiceStreak || 0}</span>
+            <span className="stat-label">Day Streak</span>
+          </div>
+        </div>
+
+        <div className="dashboard-stat-card">
+          <div className="stat-icon-wrapper check">
+            <CheckCircle2 size={24} color="#8b5cf6" />
+          </div>
+          <div className="stat-info">
+            <span className="stat-value">{recentSessions.length > 0 ? recentSessions.length + "+" : "0"}</span>
+            <span className="stat-label">Sessions Completed</span>
+          </div>
+        </div>
+
+        <div className="dashboard-stat-card progress-card">
+          <div className="cefr-circle">
+            {student.cefrLevel}
+          </div>
+          <div className="cefr-progress-info">
+            <span className="progress-label">62% to B1</span>
+            <div className="progress-bar-bg">
+              <div className="progress-bar-fill" style={{ width: '62%' }}></div>
+            </div>
+            <span className="progress-subtext">CEFR Progress</span>
+          </div>
+        </div>
       </div>
+      
     </div>
   );
 }
