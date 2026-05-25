@@ -40,15 +40,24 @@ function Layout({ student, currentView, setCurrentView, onLogout, children }) {
             <FileText size={20} className="nav-icon" />
             Sessions
           </button>
-          <button className="nav-item inactive">
+          <button 
+            className={`nav-item ${currentView === 'PROGRESS' ? 'active' : ''}`}
+            onClick={() => setCurrentView('PROGRESS')}
+          >
             <BarChart2 size={20} className="nav-icon" />
             Progress
           </button>
-          <button className="nav-item inactive">
+          <button 
+            className={`nav-item ${currentView === 'VOCABULARY' ? 'active' : ''}`}
+            onClick={() => setCurrentView('VOCABULARY')}
+          >
             <BookOpen size={20} className="nav-icon" />
             Vocabulary
           </button>
-          <button className="nav-item inactive">
+          <button 
+            className={`nav-item ${currentView === 'SETTINGS' ? 'active' : ''}`}
+            onClick={() => setCurrentView('SETTINGS')}
+          >
             <Settings size={20} className="nav-icon" />
             Settings
           </button>

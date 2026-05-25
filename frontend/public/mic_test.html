@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head><title>Mic Test</title></head>
+<body style="font-family: sans-serif; padding: 2rem;">
+  <h2>Microphone Diagnostic</h2>
+  <pre id="log" style="background: #f0f0f0; padding: 1rem; border-radius: 8px; white-space: pre-wrap;"></pre>
+  <script>
+    const log = document.getElementById('log');
+    function print(msg) { log.textContent += msg + '\n'; }
+
+    async function run() {
+      // 1. Check if mediaDevices API exists
+      if (!navigator.mediaDevices) {
+        print('ERROR: navigator.mediaDevices not available. Are you on HTTPS or localhost?');
+        return;
+      }
+      print('OK: mediaDevices API available');
+
+      // 2. Enumerate devices
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const mics = devices.filter(d => d.kind === 'audioinput');
+        print(`Found ${mics.length} microphone(s):`);
+        mics.forEach((m, i) => print(`  ${i+1}. ${m.label || '(unnamed)'} [${m.deviceId.slice(0,8)}...]`));
+        if (mics.length === 0) {
+          print('ERROR: No microphone devices found. Check Device Manager.');
+          return;
+        }
+      } catch (e) {
+        print('ERROR enumerating devices: ' + e.message);
+      }
+
+      // 3. Try getUserMedia with no constraints
+      print('\nTest 1: getUserMedia({ audio: true })...');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        print('SUCCESS! Got stream with ' + stream.getAudioTracks().length + ' audio track(s)');
+        stream.getTracks().forEach(t => { print('  Track: ' + t.label + ' state=' + t.readyState); t.stop(); });
+        print('Tracks stopped.');
+      } catch (e) {
+        print('FAILED: ' + e.name + ': ' + e.message);
+        if (e.name === 'NotReadableError') {
+          print('\n--- DIAGNOSIS ---');
+          print('The browser CAN see your mic but the OS is blocking access.');
+          print('Fix: Windows Settings > Privacy & Security > Microphone');
+          print('  1. Turn ON "Microphone access"');
+          print('  2. Turn ON "Let desktop apps access your microphone"');
+          print('  3. Also check: right-click speaker icon > Sound Settings > Input');
+          print('     Make sure a device is selected and the volume bar moves when you speak.');
+        }
+      }
+    }
+    run();
+  </script>
+</body>
+</html>
