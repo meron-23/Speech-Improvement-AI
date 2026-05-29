@@ -103,8 +103,8 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      // Send a ping every 30 seconds to prevent Render/Cloudflare from dropping idle connections
+        ws.onopen = () => {
+      // Send a keep‑alive ping every 30 seconds to avoid idle timeouts
       ws.pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -119,11 +119,35 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     };
     
     ws.onclose = (event) => {
+      // Clear ping interval if set
       if (ws.pingInterval) clearInterval(ws.pingInterval);
-      if (!event.wasClean && !isEndingRef.current) {
-        setSttError("Backend connection closed unexpectedly. Please end session and try again.");
+
+      // If the session is ending, do not attempt reconnect
+      if (isEndingRef.current) {
+        setSttError("Session ended. Connection closed.");
         updateVadState('ERROR');
+        return;
       }
+
+      // Unexpected close – attempt reconnection with exponential backoff
+      const maxRetries = 5;
+      const baseDelay = 1000; // 1 second
+
+      const attemptReconnect = (retryCount) => {
+        if (retryCount > maxRetries) {
+          setSttError("Unable to maintain WebSocket connection. Please try again later.");
+          updateVadState('ERROR');
+          return;
+        }
+        const delay = baseDelay * Math.pow(2, retryCount);
+        setTimeout(() => {
+          console.log(`Reconnecting WebSocket attempt ${retryCount + 1}`);
+          connectBackendWebSocket();
+        }, delay);
+      };
+
+      // Start first reconnection attempt
+      attemptReconnect(0);
     };
 
     ws.onmessage = (event) => {
