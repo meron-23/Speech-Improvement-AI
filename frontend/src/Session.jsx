@@ -199,7 +199,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
 
     try {
       const deepgramToken = deepgramKeyRef.current?.trim();
-      const wsUrl = `wss://api.deepgram.com/v1/listen?model=general&language=en-US&punctuate=true&endpointing=3000`;
+      const wsUrl = `wss://api.deepgram.com/v1/listen?model=general&language=en-US&punctuate=true&interim_results=true&endpointing=2000&utterance_end_ms=3000`;
       const connection = new WebSocket(wsUrl, ['token', deepgramToken]);
 
       connection.onerror = (err) => {
@@ -225,13 +225,33 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       };
 
       connection.onmessage = (event) => {
+        if (vadStateRef.current !== 'LISTENING') {
+          transcriptBufferRef.current = [];
+          return false;
+        }
+
         const data = JSON.parse(event.data);
+        
         if (data.type === 'Results') {
           const transcript = data.channel.alternatives[0].transcript;
-          if (data.is_final && transcript && transcript.trim()) {
-             handleSpeechEnd(transcript);
+          if (data.is_final && transcript) {
+             transcriptBufferRef.current.push(transcript);
           }
+          if (data.speech_final) {
+             const fullTranscript = transcriptBufferRef.current.join(' ').trim();
+             if (fullTranscript) {
+               handleSpeechEnd(fullTranscript);
+             }
+             transcriptBufferRef.current = [];
+          }
+        } else if (data.type === 'UtteranceEnd') {
+             const fullTranscript = transcriptBufferRef.current.join(' ').trim();
+             if (fullTranscript) {
+               handleSpeechEnd(fullTranscript);
+             }
+             transcriptBufferRef.current = [];
         }
+        
         return false;
       };
     } catch (wsErr) {
