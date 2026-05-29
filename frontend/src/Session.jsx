@@ -7,6 +7,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   const [showTestPrompt, setShowTestPrompt] = useState(false);
   const [vadState, setVadState] = useState('IDLE');
   const [isSessionActive, setIsSessionActive] = useState(false);
+  const [isServerReady, setIsServerReady] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [outcome, setOutcome] = useState(null);
   const [isEnding, setIsEnding] = useState(false);
@@ -45,8 +46,12 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       .then(res => res.json())
       .then(data => {
         deepgramKeyRef.current = data.key;
+        setIsServerReady(true);
       })
-      .catch(err => console.error("Error fetching deepgram token", err));
+      .catch(err => {
+        console.error("Error fetching deepgram token", err);
+        setSttError("Could not connect to the backend server. It might be asleep. Please refresh.");
+      });
 
     return () => {
       stopMedia();
@@ -97,6 +102,29 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     const wsUrl = API_BASE_URL.replace('http', 'ws') + '/chat_stream';
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+
+    ws.onopen = () => {
+      // Send a ping every 30 seconds to prevent Render/Cloudflare from dropping idle connections
+      ws.pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 30000);
+    };
+
+    ws.onerror = (err) => {
+      console.error("WebSocket Error:", err);
+      setSttError("Backend WebSocket connection failed. The server might have disconnected.");
+      updateVadState('ERROR');
+    };
+    
+    ws.onclose = (event) => {
+      if (ws.pingInterval) clearInterval(ws.pingInterval);
+      if (!event.wasClean && !isEndingRef.current) {
+        setSttError("Backend connection closed unexpectedly. Please end session and try again.");
+        updateVadState('ERROR');
+      }
+    };
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -493,7 +521,23 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
             </div>
             <h3 style={{ fontSize: '1.5rem', color: '#1e293b', marginBottom: '0.5rem' }}>Ultra-Fast Mode</h3>
             <p style={{ maxWidth: '300px', lineHeight: '1.6', marginBottom: '2rem' }}>Experience sub-second response times powered by Groq, Deepgram, and Cartesia.</p>
-            <button onClick={startConversation} style={{ background: '#86198f', color: 'white', padding: '14px 32px', borderRadius: '12px', fontSize: '1.05rem', fontWeight: '700', border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(134, 25, 143, 0.3)' }}>Start Conversation</button>
+            <button 
+              onClick={startConversation} 
+              disabled={!isServerReady}
+              style={{ 
+                background: isServerReady ? '#86198f' : '#cbd5e1', 
+                color: 'white', 
+                padding: '14px 32px', 
+                borderRadius: '12px', 
+                fontSize: '1.05rem', 
+                fontWeight: '700', 
+                border: 'none', 
+                cursor: isServerReady ? 'pointer' : 'not-allowed', 
+                boxShadow: isServerReady ? '0 4px 12px rgba(134, 25, 143, 0.3)' : 'none' 
+              }}
+            >
+              {isServerReady ? 'Start Conversation' : 'Waking up server... (can take 50s)'}
+            </button>
           </div>
         )}
 
