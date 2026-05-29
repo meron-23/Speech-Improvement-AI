@@ -20,6 +20,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   const vadStateRef = useRef('IDLE');
   const conversationRef = useRef([]);
   const isEndingRef = useRef(false);
+  const [userTurnCount, setUserTurnCount] = useState(0);
   
   // Audio Playback Refs
   const wsRef = useRef(null);
@@ -203,7 +204,8 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   };
 
   const handleTurnEnd = () => {
-    if (conversationRef.current.length >= MAX_TURNS || isEndingRef.current) {
+
+    if (userTurnCount >= MAX_TURNS || isEndingRef.current) {
       if (!isEndingRef.current) {
         setIsEnding(true);
         endSession();
@@ -315,6 +317,8 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
 
   const startConversation = () => {
     if (isEnding || outcome) return;
+    // Reset user turn counter at the start of a new session
+    setUserTurnCount(0);
     connectBackendWebSocket();
     setIsSessionActive(true);
     updateVadState('SETTING_UP');
@@ -324,6 +328,9 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   const handleSpeechEnd = (transcript) => {
     const trimmedTranscript = transcript.trim();
     if (!trimmedTranscript || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    // Increment user turn count
+    setUserTurnCount(prev => prev + 1);
 
     const userMessage = { role: 'user', text: trimmedTranscript };
     const nextConversation = [...conversationRef.current, userMessage];
@@ -424,6 +431,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     setIsSessionActive(false);
     updateVadState('IDLE');
     setFeedback("");
+    setUserTurnCount(0);
     if (wsRef.current) wsRef.current.close();
   };
 
@@ -530,8 +538,8 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
           <p style={{ color: 'var(--text-muted)' }}>{activeLesson?.objective || 'Talk naturally with your AI partner.'}</p>
         </div>
         <div style={{ textAlign: 'right' }}>
-           <div style={{ fontSize: '0.8rem', fontWeight: '700', color: Math.floor(conversation.length / 2) >= MAX_TURNS ? '#ef4444' : 'var(--text-muted)', marginBottom: '0.5rem' }}>
-              TURN LIMIT: {Math.floor(conversation.length / 2)} / {MAX_TURNS}
+           <div style={{ fontSize: '0.8rem', fontWeight: '700', color: userTurnCount >= MAX_TURNS ? '#ef4444' : 'var(--text-muted)', marginBottom: '0.5rem' }}>
+              TURN LIMIT: {userTurnCount} / {MAX_TURNS}
            </div>
            <button onClick={onViewDashboard} style={{ background: '#f1f5f9', color: '#64748b', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '700', cursor: 'pointer', fontSize: '0.9rem' }}>Exit Session</button>
         </div>
