@@ -176,7 +176,21 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       }
       if (data.type === 'done') {
         if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
-          handleTurnEnd();
+          // Fallback to browser's native SpeechSynthesis if Cartesia audio failed
+          if ('speechSynthesis' in window && data.full_text) {
+            updateVadState('AI_SPEAKING');
+            const utterance = new SpeechSynthesisUtterance(data.full_text);
+            const voices = window.speechSynthesis.getVoices();
+            const englishVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Female') || v.name.includes('Google'))) || voices.find(v => v.lang.startsWith('en'));
+            if (englishVoice) utterance.voice = englishVoice;
+            
+            utterance.onend = () => handleTurnEnd();
+            utterance.onerror = () => handleTurnEnd();
+            
+            window.speechSynthesis.speak(utterance);
+          } else {
+            handleTurnEnd();
+          }
         }
       }
     };
@@ -253,13 +267,19 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
 
     try {
       const deepgramToken = deepgramKeyRef.current?.trim();
-      const wsUrl = `wss://api.deepgram.com/v1/listen?model=general&language=en-US&punctuate=true&interim_results=true&endpointing=2000&utterance_end_ms=3000`;
+      // Added keepalive=true to prevent 10s silence timeout
+      const wsUrl = `wss://api.deepgram.com/v1/listen?model=general&language=en-US&punctuate=true&interim_results=true&endpointing=2000&utterance_end_ms=3000&keepalive=true`;
       const connection = new WebSocket(wsUrl, ['token', deepgramToken]);
 
       connection.onerror = (err) => {
         console.error("Deepgram Error:", err);
-        setSttError("Deepgram connection error. Please check your network.");
-        updateVadState('ERROR');
+      };
+
+      connection.onclose = () => {
+        if (!isEndingRef.current && vadStateRef.current !== 'ERROR') {
+          console.log("Deepgram connection closed unexpectedly. Reconnecting...");
+          setTimeout(() => connectDeepgram(deepgramKeyRef.current), 1000);
+        }
       };
 
       dgConnectionRef.current = connection;
@@ -475,18 +495,27 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
             <div className="feedback-grid" style={{ textAlign: 'left', marginBottom: '2rem', display: 'grid', gap: '1rem', maxHeight: '300px', overflowY: 'auto', padding: '0.5rem' }}>
               {(() => {
                 const cleanFeedback = (feedback || "").replace(/#{1,6}\s?/g, '').replace(/>{1,2}\s?/g, '').replace(/\*\*/g, '').replace(/\*/g, '').trim();
-                let sections = cleanFeedback.split(/(?=🌟|🛠️|🔥)/);
+                let sections = cleanFeedback.split(/(?=💬|🎯|💡|🌟|🛠️|🔥)/);
                 if (sections.length <= 1 && cleanFeedback.includes('\n\n')) sections = cleanFeedback.split('\n\n');
                 return sections.map((section, idx) => {
                   if (!section.trim()) return null;
+                  const isYouSaid = section.includes('💬');
+                  const isAccuracy = section.includes('🎯');
+                  const isReason = section.includes('💡');
+                  
                   const isStrength = section.includes('🌟') || idx === 0;
                   const isFix = section.includes('🛠️') || idx === 1;
                   const isChallenge = section.includes('🔥') || idx >= 2;
+
                   let bgColor = '#f8fafc', borderColor = '#e2e8f0', iconColor = '#64748b';
-                  if (isStrength) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; iconColor = '#16a34a'; }
-                  if (isFix) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; iconColor = '#d97706'; }
-                  if (isChallenge) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; iconColor = '#2563eb'; }
-                  const title = section.includes(':') ? section.split(':')[0] : (isStrength ? '🌟 Strengths' : (isFix ? '🛠️ Quick Fixes' : '🔥 Next Mission'));
+                  if (isYouSaid) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; iconColor = '#2563eb'; }
+                  else if (isAccuracy) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; iconColor = '#16a34a'; }
+                  else if (isReason) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; iconColor = '#d97706'; }
+                  else if (isStrength) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; iconColor = '#16a34a'; }
+                  else if (isFix) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; iconColor = '#d97706'; }
+                  else if (isChallenge) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; iconColor = '#2563eb'; }
+
+                  const title = section.includes(':') ? section.split(':')[0] : (isYouSaid ? '💬 You Said' : (isAccuracy ? '🎯 Accuracy' : (isReason ? '💡 Reason & Fix' : (isStrength ? '🌟 Strengths' : (isFix ? '🛠️ Quick Fixes' : '🔥 Next Mission')))));
                   const content = section.includes(':') ? section.split(':').slice(1).join(':').trim() : section.trim();
                   return (
                     <div key={idx} style={{ backgroundColor: bgColor, padding: '1.25rem', borderRadius: '16px', border: `1px solid ${borderColor}`, fontSize: '0.95rem', lineHeight: '1.6' }}>

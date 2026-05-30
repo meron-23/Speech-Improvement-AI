@@ -474,29 +474,32 @@ async def generate_feedback(req: FeedbackRequest):
         from groq import Groq
         groq_client = Groq(api_key=groq_key)
         
-        full_conversation = "\n".join([f"{msg['role']}: {msg['text']}" for msg in req.conversation])
+        formatted_convo = []
+        for msg in req.conversation:
+            if msg['role'] == 'user':
+                formatted_convo.append(f"STUDENT SAID: {msg['text']}")
+            else:
+                formatted_convo.append(f"COACH SAID: {msg['text']}")
+        full_conversation = "\n".join(formatted_convo)
         
-        prompt = f"""Analyze this English practice session. 
-Be an encouraging, fun, and supportive coach! 
+        prompt = f"""Analyze this English practice session.
+You are a direct, helpful coach focusing on grammar and accuracy!
+You MUST ONLY analyze the sentences labeled "STUDENT SAID". DO NOT analyze "COACH SAID".
 
 CRITICAL RULE: 
 - DO NOT use any Markdown formatting. 
 - DO NOT use hash symbols (#), stars (** or *), or greater-than symbols (>).
 - Use ONLY plain text with double line breaks for spacing.
 
-Format your response exactly like this (use the emojis):
-🌟 TOP STRENGTHS:
-[Point 1]
+Format your response exactly like this:
+💬 YOU SAID:
+[Quote a specific sentence from "STUDENT SAID" that had a grammar mistake, or their best sentence if no mistakes]
 
-[Point 2]
+🎯 ACCURACY:
+[Give a % score for the student's grammar accuracy overall]
 
-🛠️ QUICK FIXES:
-[Correction 1]
-
-[Correction 2]
-
-🔥 NEXT MISSION CHALLENGE:
-[One small, fun specific goal]
+💡 REASON & FIX:
+[Explain why the student's quote was incorrect (or correct) and provide the improved version]
 
 Conversation:
 {full_conversation}"""
