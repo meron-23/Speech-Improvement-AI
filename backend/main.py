@@ -253,13 +253,20 @@ async def chat_stream(websocket: WebSocket):
         while True:
             # 1. Receive JSON payload (history, cefrLevel, lesson, transcript)
             payload = await websocket.receive_json()
-            transcript = payload.get("transcript")
+            msg_type = payload.get("type")
             
-            if not transcript:
+            if msg_type == "ping":
                 continue
                 
-            # Send transcript back so UI can display what user said
-            await websocket.send_json({"type": "transcript", "text": transcript})
+            is_start = (msg_type == "start")
+            transcript = payload.get("transcript")
+            
+            if not transcript and not is_start:
+                continue
+                
+            if transcript:
+                # Send transcript back so UI can display what user said
+                await websocket.send_json({"type": "transcript", "text": transcript})
             
             # 2. LLM Generation
             history = payload.get("history", [])
@@ -273,6 +280,9 @@ Your Role: {lesson.get('aiRole')}
 The Context: {lesson.get('context')}
 The Student's Objective: {lesson.get('objective')}
 Stay in character and help the student achieve their objective through conversation."""
+
+            if is_start:
+                system_prompt += "\n\nThis is the very beginning of the conversation. Start the roleplay by greeting the student naturally according to the context and your role. Keep it short and engaging!"
 
             system_prompt += f"""
 ADAPTIVE STYLE:
@@ -289,7 +299,8 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
             for msg in history:
                 role = "assistant" if msg["role"] == "ai" else "user"
                 messages.append({"role": role, "content": msg["text"]})
-            messages.append({"role": "user", "content": transcript})
+            if transcript:
+                messages.append({"role": "user", "content": transcript})
             
             try:
                 # Use Groq for ultra-fast generation
@@ -317,7 +328,7 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                             "Content-Type": "application/json"
                         },
                         json={
-                            "model_id": "sonic-english",
+                            "model_id": "sonic-3.5",
                             "transcript": full_ai_text,
                             "voice": {
                                 "mode": "id",

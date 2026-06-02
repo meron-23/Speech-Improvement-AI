@@ -104,13 +104,24 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-        ws.onopen = () => {
+    ws.onopen = () => {
       // Send a keep‑alive ping every 30 seconds to avoid idle timeouts
       ws.pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, 30000);
+      
+      // If this is a new session, ask the AI to start the conversation
+      if (conversationRef.current.length === 0) {
+        updateVadState('PROCESSING');
+        ws.send(JSON.stringify({
+          type: 'start',
+          history: [],
+          cefrLevel: student?.cefrLevel || 'B1',
+          lesson: activeLesson
+        }));
+      }
     };
 
     ws.onerror = (err) => {
@@ -286,7 +297,9 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
 
       connection.onopen = () => {
         setSttError(null);
-        updateVadState('LISTENING');
+        if (vadStateRef.current !== 'PROCESSING' && vadStateRef.current !== 'AI_SPEAKING') {
+          updateVadState('LISTENING');
+        }
         const mediaRecorder = new MediaRecorder(stream);
         mediaRecorderRef.current = mediaRecorder;
 
