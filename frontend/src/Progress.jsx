@@ -1,166 +1,83 @@
-import React, { useState, useEffect } from 'react';
-import API_BASE_URL from './config';
+import React, { useState, useMemo } from 'react';
 import { 
-  Trophy, Lock, Play, CheckCircle2, Award, 
-  MessageSquare, BarChart2, BookOpen, AlertCircle, Loader2 
+  Trophy, Lock, Play, CheckCircle2,
+  MessageSquare, BookOpen, AlertCircle, Loader2, X, Star
 } from 'lucide-react';
 
-function Progress({ student, onStartLesson }) {
-  const [lessons, setLessons] = useState([]);
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+function Progress({ student, sessions, lessons, dataLoading, onStartLesson }) {
+  const [selectedLesson, setSelectedLesson] = useState(null);
 
-  // Analytics states calculated from real sessions
-  const [stats, setStats] = useState({
-    totalSessions: 0,
-    passedSessions: 0,
-    passRate: 0,
-    totalWords: 0,
-    uniqueWords: 0,
-    avgWordsPerTurn: 0,
-  });
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        // 1. Fetch all lessons for the student's CEFR level
-        const lessonsRes = await fetch(`${API_BASE_URL}/lessons?level=${student.cefrLevel}`);
-        if (!lessonsRes.ok) throw new Error("Failed to fetch curriculum");
-        const lessonsData = await lessonsRes.json();
-        
-        // Sort lessons by order
-        const sortedLessons = (lessonsData.lessons || []).sort((a, b) => a.order - b.order);
-        setLessons(sortedLessons);
-
-        // 2. Fetch all student sessions
-        const sessionsRes = await fetch(`${API_BASE_URL}/sessions?studentId=${student.studentId}`);
-        if (!sessionsRes.ok) throw new Error("Failed to fetch sessions data");
-        const sessionsData = await sessionsRes.json();
-        const userSessions = sessionsData.sessions || [];
-        setSessions(userSessions);
-
-        // 3. Compute real stats
-        calculateRealStats(userSessions);
-
-      } catch (err) {
-        console.error(err);
-        setError(err.message || "An error occurred loading progress data.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [student.studentId, student.cefrLevel]);
-
-  const calculateRealStats = (sessionList) => {
-    const total = sessionList.length;
-    const passed = sessionList.filter(s => s.passed).length;
+  // Compute stats from sessions prop
+  const stats = useMemo(() => {
+    const total = sessions.length;
+    const passed = sessions.filter(s => s.passed).length;
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
-
-    let totalWords = 0;
-    let totalTurns = 0;
+    let totalWords = 0, totalTurns = 0;
     const uniqueWordsSet = new Set();
-
-    sessionList.forEach(session => {
-      const convo = session.conversation || [];
-      convo.forEach(msg => {
+    sessions.forEach(session => {
+      (session.conversation || []).forEach(msg => {
         if (msg.role === 'user' && msg.text) {
           totalTurns++;
-          // Clean and split text to count words
-          const words = msg.text
-            .toLowerCase()
-            .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "")
-            .split(/\s+/);
-          
-          words.forEach(word => {
-            if (word.trim()) {
-              totalWords++;
-              uniqueWordsSet.add(word.trim());
-            }
+          msg.text.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, '').split(/\s+/).forEach(w => {
+            if (w.trim()) { totalWords++; uniqueWordsSet.add(w.trim()); }
           });
         }
       });
     });
+    return {
+      totalSessions: total, passedSessions: passed, passRate,
+      totalWords, uniqueWords: uniqueWordsSet.size,
+      avgWordsPerTurn: totalTurns > 0 ? (totalWords / totalTurns).toFixed(1) : 0
+    };
+  }, [sessions]);
 
-    const avgWords = totalTurns > 0 ? (totalWords / totalTurns).toFixed(1) : 0;
-
-    setStats({
-      totalSessions: total,
-      passedSessions: passed,
-      passRate: passRate,
-      totalWords: totalWords,
-      uniqueWords: uniqueWordsSet.size,
-      avgWordsPerTurn: avgWords
-    });
-  };
-
-  // Determine locking/unlocking logic
-  const getLessonsWithStatus = () => {
-    // List of lessonIds the user has passed
-    const passedLessonIds = new Set(
-      sessions.filter(s => s.passed).map(s => s.lessonId)
-    );
-
+  const processedLessons = useMemo(() => {
+    const passedIds = new Set(sessions.filter(s => s.passed).map(s => s.lessonId));
     return lessons.map((lesson, idx) => {
-      const isCompleted = passedLessonIds.has(lesson.lessonId);
-      
-      // A lesson is unlocked if:
-      // - It is the first lesson in the level
-      // - The previous lesson in the level has been completed (passed)
-      // - The student is currently placed on this lesson (matching backend currentLessonId assignment)
+      const isCompleted = passedIds.has(lesson.lessonId);
       const isFirst = idx === 0;
-      const prevLessonCompleted = !isFirst && passedLessonIds.has(lessons[idx - 1].lessonId);
-      
-      const isUnlocked = isFirst || prevLessonCompleted || isCompleted || student.currentLesson?.lessonId === lesson.lessonId;
-
-      return {
-        ...lesson,
-        isCompleted,
-        isUnlocked
-      };
+      const prevDone = !isFirst && passedIds.has(lessons[idx - 1].lessonId);
+      const isUnlocked = isFirst || prevDone || isCompleted || student.currentLesson?.lessonId === lesson.lessonId;
+      const isCurrent = student.currentLesson?.lessonId === lesson.lessonId;
+      return { ...lesson, isCompleted, isUnlocked, isCurrent };
     });
-  };
+  }, [sessions, lessons, student.currentLesson]);
 
-  if (loading) {
+  if (dataLoading) {
     return (
       <div style={{ display: 'flex', flex: 1, height: '60vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
         <Loader2 size={40} className="spin-icon" color="var(--primary)" />
-        <span style={{ color: 'var(--text-muted)', fontWeight: '600' }}>Analyzing student performance data...</span>
+        <span style={{ color: 'var(--text-muted)', fontWeight: '600' }}>Loading Candy Map...</span>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div style={{ display: 'flex', flex: 1, height: '60vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem', color: '#dc2626' }}>
-        <AlertCircle size={40} />
-        <span>{error}</span>
-      </div>
-    );
-  }
-
-  const processedLessons = getLessonsWithStatus();
-  // Calculate completion percentage of current CEFR level
   const completedCount = processedLessons.filter(l => l.isCompleted).length;
   const totalCount = processedLessons.length;
   const levelProgress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
+  // Map generation logic (Snake Layout)
+  const itemsPerRow = 5;
+  const rows = [];
+  for (let i = 0; i < processedLessons.length; i += itemsPerRow) {
+    rows.push(processedLessons.slice(i, i + itemsPerRow));
+  }
+
+  const handleNodeClick = (lesson) => {
+    setSelectedLesson(lesson);
+  };
+
   return (
-    <div style={{ width: '100%', paddingBottom: '3rem' }}>
+    <div style={{ width: '100%', paddingBottom: '3rem', position: 'relative' }}>
       
       {/* Tab Header */}
       <div className="dashboard-greeting" style={{ marginBottom: '2rem' }}>
-        <h2>Level Progress & Analytics 📊</h2>
-        <p>Real-time statistics of your English speaking performance.</p>
+        <h2>Level Progress Map 🗺️</h2>
+        <p>Complete nodes to unlock the path and master your level!</p>
       </div>
 
       {/* Analytics Overview Grid */}
       <div className="dashboard-stats-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem', marginBottom: '3rem' }}>
-        
-        {/* Level Progress Circle Card */}
         <div className="dashboard-stat-card progress-card" style={{ height: 'auto', display: 'flex', gap: '1.25rem', padding: '1.5rem', alignItems: 'center' }}>
           <div className="cefr-circle" style={{ width: '60px', height: '60px', fontSize: '1.25rem', flexShrink: 0 }}>
             {student.cefrLevel}
@@ -176,8 +93,6 @@ function Progress({ student, onStartLesson }) {
             <span className="progress-subtext">{completedCount} of {totalCount} missions passed</span>
           </div>
         </div>
-
-        {/* Fluency Card */}
         <div className="dashboard-stat-card" style={{ display: 'flex', gap: '1.25rem', padding: '1.5rem', alignItems: 'center' }}>
           <div className="stat-icon-wrapper check" style={{ backgroundColor: '#eff6ff', color: '#2563eb' }}>
             <MessageSquare size={24} />
@@ -187,8 +102,6 @@ function Progress({ student, onStartLesson }) {
             <span className="stat-label">Words / Turn (Fluency)</span>
           </div>
         </div>
-
-        {/* Vocab Size Card */}
         <div className="dashboard-stat-card" style={{ display: 'flex', gap: '1.25rem', padding: '1.5rem', alignItems: 'center' }}>
           <div className="stat-icon-wrapper" style={{ backgroundColor: '#fffbeb', color: '#d97706' }}>
             <BookOpen size={24} />
@@ -198,192 +111,113 @@ function Progress({ student, onStartLesson }) {
             <span className="stat-label">Unique Words Spoken</span>
           </div>
         </div>
-
-        {/* Pass Rate Card */}
-        <div className="dashboard-stat-card" style={{ display: 'flex', gap: '1.25rem', padding: '1.5rem', alignItems: 'center' }}>
-          <div className="stat-icon-wrapper fire" style={{ backgroundColor: '#fdf2f8', color: '#db2777' }}>
-            <Trophy size={24} />
-          </div>
-          <div className="stat-info">
-            <span className="stat-value">{stats.passRate}%</span>
-            <span className="stat-label">Mission Pass Rate</span>
-          </div>
-        </div>
       </div>
 
-      {/* Gamified Levels Path Section */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <h3 style={{ fontSize: '1.5rem', fontWeight: '800', marginBottom: '2.5rem', color: '#1e293b' }}>
-          Level Pathway
-        </h3>
-
-        <div className="levels-path-container" style={{ position: 'relative', width: '100%', maxWidth: '650px', display: 'flex', flexDirection: 'column', gap: '3rem' }}>
-          
-          {/* Vertical Connecting Line */}
-          <div style={{
-            position: 'absolute',
-            left: '30px',
-            top: '40px',
-            bottom: '40px',
-            width: '4px',
-            borderLeft: '4px dashed #e2e8f0',
-            zIndex: 1
-          }}></div>
-
-          {processedLessons.map((lesson, idx) => {
-            const isLast = idx === processedLessons.length - 1;
+      {/* Candy Crush Style Map */}
+      <div className="candy-map-wrapper">
+        <div className="candy-map-container">
+          {rows.map((rowItems, rowIndex) => {
+            const isEven = rowIndex % 2 === 0;
+            const items = isEven ? rowItems : [...rowItems].reverse();
             
             return (
-              <div 
-                key={lesson.lessonId}
-                style={{ 
-                  display: 'flex', 
-                  gap: '2rem', 
-                  alignItems: 'flex-start',
-                  position: 'relative',
-                  zIndex: 2
-                }}
-              >
-                {/* Node Step Icon */}
-                <div style={{
-                  width: '64px',
-                  height: '64px',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '1.5rem',
-                  fontWeight: '700',
-                  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-                  transition: 'all 0.3s ease',
-                  flexShrink: 0,
-                  backgroundColor: lesson.isCompleted 
-                    ? '#d1fae5' // Completed (Green)
-                    : lesson.isUnlocked 
-                      ? '#f5f3ff' // Active/Unlocked (Light Purple)
-                      : '#f1f5f9', // Locked (Gray)
-                  color: lesson.isCompleted 
-                    ? '#059669' 
-                    : lesson.isUnlocked 
-                      ? '#8b5cf6' 
-                      : '#94a3b8',
-                  border: lesson.isUnlocked && !lesson.isCompleted
-                    ? '3px solid #8b5cf6'
-                    : '3px solid transparent',
-                  animation: lesson.isUnlocked && !lesson.isCompleted
-                    ? 'pulse-ring 2s infinite'
-                    : 'none'
-                }}>
-                  {lesson.isCompleted ? (
-                    <CheckCircle2 size={32} />
-                  ) : !lesson.isUnlocked ? (
-                    <Lock size={24} />
-                  ) : (
-                    <Play size={24} style={{ marginLeft: '4px' }} />
-                  )}
-                </div>
+              <div key={rowIndex} className={`map-row ${isEven ? 'row-even' : 'row-odd'}`}>
+                
+                {/* Horizontal connection line for the row */}
+                <div className="row-connector-line"></div>
+                
+                {/* U-Turn connectors between rows */}
+                {rowIndex < rows.length - 1 && (
+                  <div className={`u-turn-connector ${isEven ? 'right' : 'left'}`}></div>
+                )}
 
-                {/* Level Detail Card */}
-                <div style={{
-                  flex: 1,
-                  backgroundColor: 'white',
-                  borderRadius: '20px',
-                  padding: '1.5rem',
-                  border: '1px solid #e2e8f0',
-                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
-                  opacity: lesson.isUnlocked ? 1 : 0.65,
-                  transition: 'all 0.3s ease',
-                  transform: lesson.isUnlocked && !lesson.isCompleted ? 'scale(1.02)' : 'none',
-                  borderColor: lesson.isUnlocked && !lesson.isCompleted ? '#d8b4fe' : '#e2e8f0'
-                }}>
+                {items.map((lesson) => {
+                  const statusClass = lesson.isCompleted ? 'completed' : lesson.isCurrent ? 'current' : lesson.isUnlocked ? 'unlocked' : 'locked';
                   
-                  {/* Header info */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                    <span style={{ 
-                      fontSize: '0.75rem', 
-                      fontWeight: '800', 
-                      letterSpacing: '0.05em', 
-                      textTransform: 'uppercase',
-                      color: lesson.isCompleted 
-                        ? '#059669' 
-                        : lesson.isUnlocked 
-                          ? '#8b5cf6' 
-                          : '#94a3b8'
-                    }}>
-                      LEVEL {lesson.order} • {lesson.isCompleted ? 'Completed' : lesson.isUnlocked ? 'Active' : 'Locked'}
-                    </span>
-                    
-                    {lesson.isCompleted && (
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', color: '#059669', fontWeight: '700', backgroundColor: '#ecfdf5', padding: '4px 8px', borderRadius: '20px' }}>
-                        <Award size={14} /> Passed
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Title & Desc */}
-                  <h4 style={{ fontSize: '1.15rem', fontWeight: '800', marginBottom: '0.5rem', color: '#1e293b' }}>
-                    {lesson.title}
-                  </h4>
-                  <p style={{ color: '#64748b', fontSize: '0.9rem', lineHeight: '1.5', marginBottom: '1rem' }}>
-                    {lesson.objective}
-                  </p>
-
-                  {/* Vocabulary Tags */}
-                  {lesson.targetVocabulary && lesson.targetVocabulary.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem' }}>
-                      {lesson.targetVocabulary.map((vocab, vIdx) => (
-                        <span 
-                          key={vIdx}
-                          style={{
-                            fontSize: '0.75rem',
-                            fontWeight: '600',
-                            padding: '4px 10px',
-                            borderRadius: '12px',
-                            backgroundColor: lesson.isUnlocked ? '#f3e8ff' : '#f1f5f9',
-                            color: lesson.isUnlocked ? '#6b21a8' : '#64748b'
-                          }}
-                        >
-                          📖 {vocab}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* CTA Action Button */}
-                  {lesson.isUnlocked && (
-                    <button 
-                      onClick={() => onStartLesson(lesson)}
-                      style={{
-                        padding: '10px 20px',
-                        borderRadius: '12px',
-                        fontWeight: '700',
-                        fontSize: '0.9rem',
-                        border: 'none',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        transition: 'all 0.2s ease',
-                        boxShadow: lesson.isCompleted ? 'none' : '0 4px 12px rgba(139, 92, 246, 0.25)',
-                        backgroundColor: lesson.isCompleted ? '#f1f5f9' : '#8b5cf6',
-                        color: lesson.isCompleted ? '#475569' : 'white'
-                      }}
+                  return (
+                    <div 
+                      key={lesson.lessonId} 
+                      className={`map-node-wrapper`}
+                      onClick={() => handleNodeClick(lesson)}
                     >
-                      {lesson.isCompleted ? (
-                        <>Replay Practice</>
-                      ) : (
-                        <>Start Level <Play size={14} fill="white" /></>
-                      )}
-                    </button>
-                  )}
-                </div>
+                      <div className={`map-node ${statusClass}`}>
+                        <div className="node-inner">
+                          {lesson.isCompleted ? (
+                            <Star size={24} fill="currentColor" />
+                          ) : lesson.isCurrent ? (
+                            <Play size={24} fill="currentColor" style={{ marginLeft: '4px' }} />
+                          ) : lesson.isUnlocked ? (
+                            <span className="node-number">{lesson.order}</span>
+                          ) : (
+                            <Lock size={20} />
+                          )}
+                        </div>
+                        {/* Tooltip on hover */}
+                        <div className="node-tooltip">{lesson.title}</div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Node Details Modal */}
+      {selectedLesson && (
+        <div className="map-modal-overlay" onClick={() => setSelectedLesson(null)}>
+          <div className="map-modal-content animate-pop-in" onClick={e => e.stopPropagation()}>
+            <button className="modal-close-btn" onClick={() => setSelectedLesson(null)}>
+              <X size={20} />
+            </button>
+
+            <div className="modal-header">
+              <span className={`modal-status-badge ${selectedLesson.isCompleted ? 'completed' : selectedLesson.isUnlocked ? 'active' : 'locked'}`}>
+                {selectedLesson.isCompleted ? 'Completed ⭐' : selectedLesson.isUnlocked ? 'Active Mission 🎯' : 'Locked 🔒'}
+              </span>
+              <h3>Level {selectedLesson.order}: {selectedLesson.title}</h3>
+            </div>
+            
+            <div className="modal-body">
+              <p className="modal-objective">{selectedLesson.objective}</p>
+              
+              {selectedLesson.targetVocabulary && selectedLesson.targetVocabulary.length > 0 && (
+                <div className="modal-vocab-list">
+                  {selectedLesson.targetVocabulary.map((vocab, vIdx) => (
+                    <span key={vIdx} className="modal-vocab-tag">📖 {vocab}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button 
+                className={`modal-play-btn ${!selectedLesson.isUnlocked ? 'disabled' : ''}`}
+                disabled={!selectedLesson.isUnlocked}
+                onClick={() => {
+                  if (selectedLesson.isUnlocked) {
+                    // Start lesson and close modal
+                    onStartLesson(selectedLesson);
+                  }
+                }}
+              >
+                {selectedLesson.isCompleted ? (
+                  <>Replay Practice <Play size={18} fill="currentColor" /></>
+                ) : !selectedLesson.isUnlocked ? (
+                  <>Level Locked <Lock size={18} /></>
+                ) : (
+                  <>Start Mission <Play size={18} fill="currentColor" /></>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
 
 export default Progress;
+export { Progress };

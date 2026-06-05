@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Login from './Login';
 import Dashboard from './Dashboard';
 import Session from './Session';
 import History from './History';
-import Progress from './Progress';
+import Progress from './Progress.jsx';
 import Vocabulary from './Vocabulary';
 import Settings from './Settings';
 import Layout from './Layout';
@@ -13,6 +13,34 @@ function App() {
   const [currentView, setCurrentView] = useState('LOADING');
   const [student, setStudent] = useState(null);
   const [showTestPrompt, setShowTestPrompt] = useState(false);
+
+  // --- Shared cached data (fetched once, passed as props) ---
+  const [sharedSessions, setSharedSessions] = useState([]);
+  const [sharedLessons, setSharedLessons] = useState([]);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  const fetchSharedData = useCallback(async (studentData) => {
+    if (!studentData) return;
+    setDataLoading(true);
+    try {
+      const [sessionsRes, lessonsRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/sessions?studentId=${studentData.studentId}`),
+        fetch(`${API_BASE_URL}/lessons?level=${studentData.cefrLevel}`)
+      ]);
+      if (sessionsRes.ok) {
+        const data = await sessionsRes.json();
+        setSharedSessions((data.sessions || []).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+      }
+      if (lessonsRes.ok) {
+        const data = await lessonsRes.json();
+        setSharedLessons((data.lessons || []).sort((a, b) => a.order - b.order));
+      }
+    } catch (err) {
+      console.error('Failed to fetch shared data:', err);
+    } finally {
+      setDataLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const savedStudent = localStorage.getItem('speech_ai_student');
@@ -25,6 +53,9 @@ function App() {
       setCurrentView(savedView || 'DASHBOARD');
       
       if (parsed.levelComplete) setShowTestPrompt(true);
+
+      // Fetch shared data (sessions + lessons) once on load
+      fetchSharedData(parsed);
 
       // Perform a background sync with Firestore to fetch the absolute freshest profile state
       fetch(`${API_BASE_URL}/student/${parsed.studentId}`)
@@ -47,7 +78,7 @@ function App() {
     } else {
       setCurrentView('LOGIN');
     }
-  }, []);
+  }, [fetchSharedData]);
 
   // Sync currentView changes to localStorage to persist tab across refreshes
   useEffect(() => {
@@ -61,6 +92,7 @@ function App() {
     setStudent(studentData);
     setCurrentView('DASHBOARD');
     if (studentData.levelComplete) setShowTestPrompt(true);
+    fetchSharedData(studentData);
   };
 
   const handleUpdateStudent = (updatedStudent) => {
@@ -90,7 +122,10 @@ function App() {
         >
           {currentView === 'DASHBOARD' && (
             <Dashboard 
-              student={student} 
+              student={student}
+              sessions={sharedSessions}
+              lessons={sharedLessons}
+              dataLoading={dataLoading}
               onNewSession={() => setCurrentView('SESSION')}
               onViewHistory={() => setCurrentView('HISTORY')}
             />
@@ -104,13 +139,17 @@ function App() {
                 setStudent(updatedStudent);
                 localStorage.setItem('speech_ai_student', JSON.stringify(updatedStudent));
                 if (updatedStudent.levelComplete) setShowTestPrompt(true);
+                // Refresh sessions cache after a new session is saved
+                fetchSharedData(updatedStudent);
               }}
             />
           )}
 
           {currentView === 'HISTORY' && (
             <History 
-              student={student} 
+              student={student}
+              sessions={sharedSessions}
+              dataLoading={dataLoading}
               onBack={() => setCurrentView('DASHBOARD')} 
             />
           )}
@@ -118,6 +157,9 @@ function App() {
           {currentView === 'PROGRESS' && (
             <Progress 
               student={student}
+              sessions={sharedSessions}
+              lessons={sharedLessons}
+              dataLoading={dataLoading}
               onStartLesson={() => setCurrentView('SESSION')}
             />
           )}
@@ -125,6 +167,9 @@ function App() {
           {currentView === 'VOCABULARY' && (
             <Vocabulary 
               student={student}
+              sessions={sharedSessions}
+              lessons={sharedLessons}
+              dataLoading={dataLoading}
             />
           )}
 

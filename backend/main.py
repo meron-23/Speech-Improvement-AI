@@ -64,6 +64,13 @@ async def login(req: LoginRequest):
     
     student_data = doc.to_dict()
     
+    # Check if school is revoked
+    school_id = student_data.get("schoolId")
+    if school_id:
+        school_doc = db.collection("schools").document(school_id).get()
+        if school_doc.exists and school_doc.to_dict().get("status") == "REVOKED":
+            raise HTTPException(status_code=403, detail="Your school's access has been revoked. Please contact your administrator.")
+    
     # Generate custom token for Firebase Authentication
     try:
         custom_token = auth.create_custom_token(req.studentId)

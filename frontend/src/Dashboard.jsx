@@ -1,60 +1,54 @@
 import React, { useState, useEffect } from 'react';
-import API_BASE_URL from './config';
-import { Flame, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Flame, CheckCircle2, Lock, PlayCircle } from 'lucide-react';
 
-function Dashboard({ student, onNewSession, onViewHistory }) {
-  const [recentSessions, setRecentSessions] = useState([]);
-  const [totalSessionsCount, setTotalSessionsCount] = useState(0);
+function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onViewHistory }) {
+  const [modules, setModules] = useState([]);
+  const [activeModuleId, setActiveModuleId] = useState(null);
+  const [passedLessonIds, setPassedLessonIds] = useState(new Set());
   const [levelProgress, setLevelProgress] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [totalSessionsCount, setTotalSessionsCount] = useState(0);
 
+  // Derive everything from the props whenever sessions or lessons change
   useEffect(() => {
-    const fetchDashboardData = async () => {
-      try {
-        // Fetch student's sessions and all lessons for their level in parallel
-        const [sessionsRes, lessonsRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/sessions?studentId=${student.studentId}`),
-          fetch(`${API_BASE_URL}/lessons?level=${student.cefrLevel}`)
-        ]);
+    const passedIds = new Set(
+      sessions.filter(s => s.passed).map(s => s.lessonId)
+    );
+    setPassedLessonIds(passedIds);
+    setTotalSessionsCount(sessions.length);
 
-        let userSessions = [];
-        if (sessionsRes.ok) {
-          const sessionsData = await sessionsRes.json();
-          userSessions = sessionsData.sessions || [];
-          
-          // Sort for recent sessions
-          const sorted = [...userSessions]
-            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-            .slice(0, 5);
-          setRecentSessions(sorted);
-          setTotalSessionsCount(userSessions.length);
-        }
+    const completedCount = lessons.filter(l => passedIds.has(l.lessonId)).length;
+    const totalCount = lessons.length;
+    setLevelProgress(totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0);
 
-        if (lessonsRes.ok) {
-          const lessonsData = await lessonsRes.json();
-          const lessonsList = lessonsData.lessons || [];
-
-          // Find the set of lessonIds the user has passed (passed = true)
-          const passedLessonIds = new Set(
-            userSessions.filter(s => s.passed).map(s => s.lessonId)
-          );
-
-          // Calculate completed lessons for current CEFR level
-          const completedCount = lessonsList.filter(l => passedLessonIds.has(l.lessonId)).length;
-          const totalCount = lessonsList.length;
-          const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-          
-          setLevelProgress(progressPercent);
-        }
-      } catch (err) {
-        console.error("Failed to fetch dashboard data", err);
-      } finally {
-        setLoading(false);
+    // Group lessons into modules
+    const modulesMap = {};
+    lessons.forEach(lesson => {
+      const modId = lesson.moduleId || 'unknown';
+      if (!modulesMap[modId]) {
+        modulesMap[modId] = {
+          id: modId,
+          title: lesson.moduleTitle || 'General',
+          order: lesson.moduleOrder || 999,
+          tasks: []
+        };
       }
-    };
+      modulesMap[modId].tasks.push(lesson);
+    });
 
-    fetchDashboardData();
-  }, [student.studentId, student.cefrLevel]);
+    const modulesArr = Object.values(modulesMap).sort((a, b) => a.order - b.order);
+    modulesArr.forEach(mod => {
+      mod.tasks.sort((a, b) => (a.taskOrder || a.order) - (b.taskOrder || b.order));
+    });
+    setModules(modulesArr);
+
+    // Auto-select the active module
+    const currentModId = student.currentLesson?.moduleId;
+    if (currentModId && modulesArr.find(m => m.id === currentModId)) {
+      setActiveModuleId(currentModId);
+    } else if (modulesArr.length > 0) {
+      setActiveModuleId(prev => prev || modulesArr[0].id);
+    }
+  }, [sessions, lessons, student.currentLesson]);
 
   const getNextCefrLevel = (currentLevel) => {
     const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
@@ -64,64 +58,35 @@ function Dashboard({ student, onNewSession, onViewHistory }) {
   };
 
   const getLessonEmoji = (lessonId) => {
-    switch (lessonId) {
-      case 'l1_meeting': return '🤝';
-      case 'l2_cafe': return '☕';
-      case 'l3_directions': return '🗺️';
-      case 'l4_hotel': return '🔑';
-      case 'l5_interview': return '💼';
-      case 'l6_negotiation': return '🤝';
-      case 'l7_ethics': return '🤖';
-      default: return '🎯';
-    }
+    if (!lessonId) return '🎯';
+    const l = lessonId.toLowerCase();
+    if (l.includes('meeting') || l.includes('greeting') || l.includes('introduce')) return '🤝';
+    if (l.includes('cafe')) return '☕';
+    if (l.includes('market') || l.includes('shop')) return '🛍️';
+    if (l.includes('direction') || l.includes('travel')) return '🗺️';
+    if (l.includes('hotel')) return '🏨';
+    if (l.includes('interview')) return '💼';
+    if (l.includes('negotiation')) return '📊';
+    if (l.includes('ethics')) return '🤖';
+    if (l.includes('feelings') || l.includes('stress')) return '❤️';
+    if (l.includes('emergency')) return '🚨';
+    if (l.includes('office') || l.includes('work')) return '🏢';
+    if (l.includes('review')) return '⭐';
+    return '🎯';
   };
 
-  // Greeting based on time of day
   const hour = new Date().getHours();
   const greetingTime = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
 
+  const activeModule = modules.find(m => m.id === activeModuleId);
+
   return (
-    <div style={{ width: '100%' }}>
+    <div style={{ width: '100%', paddingBottom: '40px' }}>
       {/* Greeting Section */}
       <div className="dashboard-greeting">
         <h2>Good {greetingTime}, {student.name.split(' ')[0]}! 👋</h2>
-        <p>Let's practice speaking and build your confidence.</p>
+        <p>Let's continue your journey in English.</p>
       </div>
-
-      {/* Hero Mission Card */}
-      {student.currentLesson && (
-        <div className="hero-mission-card">
-          <div className="hero-mission-content">
-            <div className="hero-mission-header">
-              <div className="hero-mission-icon">
-                <span role="img" aria-label="Lesson Emoji">{getLessonEmoji(student.currentLesson.lessonId)}</span>
-              </div>
-              <div className="hero-mission-titles">
-                <span className="hero-mission-subtitle">Today's Mission</span>
-                <h3 className="hero-mission-title">{student.currentLesson.title}</h3>
-              </div>
-            </div>
-
-            <div className="hero-mission-badges">
-              <span className="hero-badge">⏱️ 10 Turns Max</span>
-              <span className="hero-badge">📊 {student.currentLesson.cefrLevel} Level</span>
-              <span className="hero-badge">📖 {student.currentLesson.targetVocabulary?.length || 0} Vocab Words</span>
-            </div>
-
-            <p className="hero-mission-desc">
-              {student.currentLesson.objective || 'Practice speaking naturally and building confidence in real-world scenarios.'}
-            </p>
-
-            <button className="hero-start-btn" onClick={onNewSession}>
-              Start Session <ArrowRight size={18} />
-            </button>
-          </div>
-          
-          <div className="hero-mission-illustration">
-            <img src="/mission_illustration.png" alt="Mission Illustration" />
-          </div>
-        </div>
-      )}
 
       {/* Stats Row */}
       <div className="dashboard-stats-row">
@@ -157,6 +122,97 @@ function Dashboard({ student, onNewSession, onViewHistory }) {
             <span className="progress-subtext">CEFR Progress</span>
           </div>
         </div>
+      </div>
+
+      {/* Current Mission Banner */}
+      {student.currentLesson && (
+        <div className="current-mission-banner" onClick={onNewSession}>
+          <div className="mission-banner-info">
+            <span className="mission-banner-label">Active Mission</span>
+            <h3>{student.currentLesson.title}</h3>
+            <p>{student.currentLesson.objective}</p>
+          </div>
+          <button className="mission-banner-btn">
+            Start Now <PlayCircle size={18} />
+          </button>
+        </div>
+      )}
+
+      {/* Learning Roadmap with Tabs */}
+      <div className="roadmap-container">
+        <div className="roadmap-header">
+            <h3 className="roadmap-title">Learning Pathway - {student.cefrLevel}</h3>
+        </div>
+        
+        {dataLoading ? (
+          <div className="roadmap-loading">Loading roadmap...</div>
+        ) : (
+          <>
+            <div className="module-tabs-container">
+              {modules.map((mod, index) => (
+                <button 
+                  key={mod.id} 
+                  className={`module-tab ${activeModuleId === mod.id ? 'active' : ''}`}
+                  onClick={() => setActiveModuleId(mod.id)}
+                >
+                  <span className="module-tab-number">M{index + 1}</span>
+                  <span className="module-tab-title">{mod.title}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="roadmap-modules">
+              {activeModule && (
+                <div className="roadmap-module animate-fade-in">
+                  <div className="module-tasks">
+                    {activeModule.tasks.map((task, tIndex) => {
+                      const isPassed = passedLessonIds.has(task.lessonId);
+                      const isCurrent = student.currentLesson?.lessonId === task.lessonId;
+                      const isLocked = !isPassed && !isCurrent;
+                      const isLastInModule = tIndex === activeModule.tasks.length - 1;
+                      
+                      let taskClass = "roadmap-task";
+                      if (isPassed) taskClass += " passed";
+                      if (isCurrent) taskClass += " current";
+                      if (isLocked) taskClass += " locked";
+
+                      return (
+                        <div key={task.lessonId} className={taskClass} onClick={() => {
+                          if (isCurrent) onNewSession();
+                        }}>
+                          <div className="task-icon-area">
+                            <div className={`task-icon ${isPassed ? 'check' : isCurrent ? 'play' : 'lock'}`}>
+                              {isPassed ? <CheckCircle2 size={20} /> : isCurrent ? <PlayCircle size={20} /> : <Lock size={18} />}
+                            </div>
+                            {/* Connector line */}
+                            {!isLastInModule && <div className={`task-connector ${isPassed ? 'passed' : ''}`}></div>}
+                          </div>
+                          
+                          <div className="task-content">
+                            <div className="task-emoji">{getLessonEmoji(task.lessonId)}</div>
+                            <div className="task-details">
+                              <h5>{task.title}</h5>
+                              <span className="task-meta">
+                                {task.targetVocabulary?.length || 0} vocabulary words
+                              </span>
+                            </div>
+                            
+                            {isCurrent && (
+                              <span className="task-badge current">Current</span>
+                            )}
+                            {isPassed && (
+                              <span className="task-badge review">Passed</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
       
     </div>

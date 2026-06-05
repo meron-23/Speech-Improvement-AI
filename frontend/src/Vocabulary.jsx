@@ -1,17 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import API_BASE_URL from './config';
+import React, { useState, useMemo } from 'react';
 import { 
   Volume2, Lock, CheckCircle2, BookOpen, Search, 
-  Filter, Loader2, AlertCircle, Sparkles, MessageSquare 
+  Filter, Loader2, Sparkles, MessageSquare 
 } from 'lucide-react';
 
-function Vocabulary({ student }) {
-  const [lessons, setLessons] = useState([]);
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  
-  // Search & Filter states for Spoken Dictionary
+function Vocabulary({ student, sessions, lessons, dataLoading }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [hideCommon, setHideCommon] = useState(true);
 
@@ -26,100 +19,34 @@ function Vocabulary({ student }) {
     'this', 'that', 'these', 'those', 'there', 'here', 'then', 'than', 'too', 'very', 'just'
   ]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        // 1. Fetch lessons for their level
-        const lessonsRes = await fetch(`${API_BASE_URL}/lessons?level=${student.cefrLevel}`);
-        if (!lessonsRes.ok) throw new Error("Failed to fetch curriculum");
-        const lessonsData = await lessonsRes.json();
-        const sortedLessons = (lessonsData.lessons || []).sort((a, b) => a.order - b.order);
-        setLessons(sortedLessons);
-
-        // 2. Fetch all student sessions
-        const sessionsRes = await fetch(`${API_BASE_URL}/sessions?studentId=${student.studentId}`);
-        if (!sessionsRes.ok) throw new Error("Failed to fetch session history");
-        const sessionsData = await sessionsRes.json();
-        setSessions(sessionsData.sessions || []);
-
-      } catch (err) {
-        console.error(err);
-        setError(err.message || "An error occurred loading vocabulary.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [student.studentId, student.cefrLevel]);
-
-  // TTS Pronunciation speaker
-  const playPronunciation = (word) => {
-    if ('speechSynthesis' in window) {
-      // Cancel active voice playbacks
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(word);
-      utterance.rate = 0.85; // Slightly slower for clear instruction
-      
-      const savedVoiceURI = localStorage.getItem('speech_tts_voice_uri');
-      const voices = window.speechSynthesis.getVoices();
-      let matchedVoice = voices.find(v => v.voiceURI === savedVoiceURI);
-      
-      // Fallback matching to any English voice if URI not configured/found
-      if (!matchedVoice) {
-        matchedVoice = voices.find(v => v.lang.toLowerCase().startsWith('en'));
-      }
-
-      if (matchedVoice) {
-        utterance.voice = matchedVoice;
-        utterance.lang = matchedVoice.lang;
-      } else {
-        utterance.lang = 'en-US';
-      }
-
-      window.speechSynthesis.speak(utterance);
-    } else {
-      alert("Your browser does not support speech synthesis pronunciation.");
-    }
-  };
-
-  // Compile the student's personal dictionary (spoken word frequencies)
-  const getPersonalDictionary = () => {
+  // Personal spoken dictionary derived from sessions
+  const personalDictionary = useMemo(() => {
     const counts = {};
     sessions.forEach(session => {
       (session.conversation || []).forEach(msg => {
         if (msg.role === 'user' && msg.text) {
-          const words = msg.text
-            .toLowerCase()
-            .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "")
-            .split(/\s+/);
-          
-          words.forEach(word => {
-            const w = word.trim();
-            if (w) {
-              if (hideCommon && COMMON_WORDS.has(w)) return;
-              counts[w] = (counts[w] || 0) + 1;
-            }
-          });
+          msg.text.toLowerCase()
+            .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, '')
+            .split(/\s+/)
+            .forEach(word => {
+              const w = word.trim();
+              if (w) {
+                if (hideCommon && COMMON_WORDS.has(w)) return;
+                counts[w] = (counts[w] || 0) + 1;
+              }
+            });
         }
       });
     });
-
-    // Convert to sorted array
     return Object.entries(counts)
       .map(([word, count]) => ({ word, count }))
       .filter(item => item.word.includes(searchQuery.toLowerCase()))
       .sort((a, b) => b.count - a.count);
-  };
+  }, [sessions, hideCommon, searchQuery]);
 
-  // Compile Target Vocabulary lists with locks and mastery validation
-  const getTargetVocabularyData = () => {
-    const passedLessonIds = new Set(
-      sessions.filter(s => s.passed).map(s => s.lessonId)
-    );
-
-    // Collect all words spoken by the user across *any* session
+  // Target vocabulary groups derived from lessons + sessions
+  const targetVocabGroups = useMemo(() => {
+    const passedLessonIds = new Set(sessions.filter(s => s.passed).map(s => s.lessonId));
     const allSpokenText = sessions
       .flatMap(s => s.conversation || [])
       .filter(msg => msg.role === 'user' && msg.text)
@@ -127,54 +54,42 @@ function Vocabulary({ student }) {
       .join(' ');
 
     return lessons.map((lesson, idx) => {
-      // Locking logic matching Progress.jsx
       const isFirst = idx === 0;
       const prevCompleted = !isFirst && passedLessonIds.has(lessons[idx - 1].lessonId);
       const isUnlocked = isFirst || prevCompleted || passedLessonIds.has(lesson.lessonId) || student.currentLesson?.lessonId === lesson.lessonId;
-
-      const words = (lesson.targetVocabulary || []).map(vocab => {
-        // Check if the user has said this vocab phrase/word
-        // Simple substring check handles both single words and multi-word target phrases
-        const isMastered = allSpokenText.includes(vocab.toLowerCase());
-
-        return {
-          phrase: vocab,
-          status: !isUnlocked ? 'LOCKED' : isMastered ? 'MASTERED' : 'LEARNING'
-        };
-      });
-
-      return {
-        lessonId: lesson.lessonId,
-        title: lesson.title,
-        order: lesson.order,
-        isUnlocked,
-        words
-      };
+      const words = (lesson.targetVocabulary || []).map(vocab => ({
+        phrase: vocab,
+        status: !isUnlocked ? 'LOCKED' : allSpokenText.includes(vocab.toLowerCase()) ? 'MASTERED' : 'LEARNING'
+      }));
+      return { lessonId: lesson.lessonId, title: lesson.title, order: lesson.order, isUnlocked, words };
     });
+  }, [sessions, lessons, student.currentLesson]);
+
+  // TTS Pronunciation speaker
+  const playPronunciation = (word) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(word);
+      utterance.rate = 0.85;
+      const savedVoiceURI = localStorage.getItem('speech_tts_voice_uri');
+      const voices = window.speechSynthesis.getVoices();
+      let matchedVoice = voices.find(v => v.voiceURI === savedVoiceURI);
+      if (!matchedVoice) {
+        matchedVoice = voices.find(v => v.lang.toLowerCase().startsWith('en'));
+      }
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+        utterance.lang = matchedVoice.lang;
+      } else {
+        utterance.lang = 'en-US';
+      }
+      window.speechSynthesis.speak(utterance);
+    } else {
+      alert("Your browser does not support speech synthesis pronunciation.");
+    }
   };
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', flex: 1, height: '60vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
-        <Loader2 size={40} className="spin-icon" color="var(--primary)" />
-        <span style={{ color: 'var(--text-muted)', fontWeight: '600' }}>Analyzing spoken transcripts...</span>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div style={{ display: 'flex', flex: 1, height: '60vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem', color: '#dc2626' }}>
-        <AlertCircle size={40} />
-        <span>{error}</span>
-      </div>
-    );
-  }
-
-  const targetVocabGroups = getTargetVocabularyData();
-  const personalDict = getPersonalDictionary();
-
-  // Compute overall Target Vocabulary Mastery stats
+  // Compute overall mastery stats
   let totalTargetWords = 0;
   let masteredTargetWords = 0;
   targetVocabGroups.forEach(group => {
@@ -184,6 +99,15 @@ function Vocabulary({ student }) {
     });
   });
   const vocabMasteryPercent = totalTargetWords > 0 ? Math.round((masteredTargetWords / totalTargetWords) * 100) : 0;
+
+  if (dataLoading) {
+    return (
+      <div style={{ display: 'flex', flex: 1, height: '60vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
+        <Loader2 size={40} className="spin-icon" color="var(--primary)" />
+        <span style={{ color: 'var(--text-muted)', fontWeight: '600' }}>Analyzing spoken transcripts...</span>
+      </div>
+    );
+  }
 
   return (
     <div style={{ width: '100%', paddingBottom: '3rem' }}>
@@ -282,7 +206,6 @@ function Vocabulary({ student }) {
                         ) : (
                           <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#f59e0b' }}></div>
                         )}
-                        
                         <span style={{ 
                           fontWeight: '700', 
                           fontSize: '0.95rem',
@@ -293,7 +216,6 @@ function Vocabulary({ student }) {
                         </span>
                       </div>
 
-                      {/* Right Action */}
                       {!isLocked && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                           <span style={{
@@ -307,20 +229,12 @@ function Vocabulary({ student }) {
                           }}>
                             {isMastered ? 'Mastered' : 'Learning'}
                           </span>
-
                           <button 
                             onClick={() => playPronunciation(w.phrase)}
                             style={{
-                              background: 'white',
-                              border: '1px solid #e2e8f0',
-                              borderRadius: '8px',
-                              width: '32px',
-                              height: '32px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: 'pointer',
-                              color: '#64748b',
+                              background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+                              width: '32px', height: '32px', display: 'flex', alignItems: 'center',
+                              justifyContent: 'center', cursor: 'pointer', color: '#64748b',
                               boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
                             }}
                             title="Hear Pronunciation"
@@ -343,12 +257,7 @@ function Vocabulary({ student }) {
             <MessageSquare size={20} color="#8b5cf6" /> My Spoken Dictionary
           </h3>
 
-          <div style={{
-            backgroundColor: 'white',
-            borderRadius: '20px',
-            padding: '1.5rem',
-            border: '1px solid #e2e8f0'
-          }}>
+          <div style={{ backgroundColor: 'white', borderRadius: '20px', padding: '1.5rem', border: '1px solid #e2e8f0' }}>
             {/* Search Bar */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '8px 12px', marginBottom: '1rem', backgroundColor: '#f8fafc' }}>
               <Search size={16} color="#94a3b8" />
@@ -369,12 +278,8 @@ function Vocabulary({ student }) {
               <button 
                 onClick={() => setHideCommon(!hideCommon)}
                 style={{
-                  padding: '4px 12px',
-                  borderRadius: '10px',
-                  fontSize: '0.75rem',
-                  fontWeight: '700',
-                  cursor: 'pointer',
-                  border: '1px solid #e2e8f0',
+                  padding: '4px 12px', borderRadius: '10px', fontSize: '0.75rem', fontWeight: '700',
+                  cursor: 'pointer', border: '1px solid #e2e8f0',
                   backgroundColor: hideCommon ? '#f5f3ff' : 'white',
                   color: hideCommon ? '#8b5cf6' : '#64748b',
                   borderColor: hideCommon ? '#c084fc' : '#e2e8f0'
@@ -386,35 +291,21 @@ function Vocabulary({ student }) {
 
             {/* Dictionary List */}
             <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingRight: '4px' }}>
-              {personalDict.length === 0 ? (
+              {personalDictionary.length === 0 ? (
                 <div style={{ textAlign: 'center', color: '#94a3b8', padding: '2rem 0', fontSize: '0.9rem' }}>
                   No spoken words matching filters.
                 </div>
               ) : (
-                personalDict.map((item, idx) => (
+                personalDictionary.map((item, idx) => (
                   <div 
                     key={idx}
                     style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 12px',
-                      borderRadius: '10px',
-                      backgroundColor: '#f8fafc',
-                      border: '1px solid #f1f5f9'
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '8px 12px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9'
                     }}
                   >
-                    <span style={{ fontWeight: '700', fontSize: '0.9rem', color: '#334155' }}>
-                      {item.word}
-                    </span>
-                    <span style={{ 
-                      fontSize: '0.75rem', 
-                      fontWeight: '800', 
-                      background: '#e0e7ff', 
-                      color: '#3730a3',
-                      padding: '2px 8px',
-                      borderRadius: '8px'
-                    }}>
+                    <span style={{ fontWeight: '700', fontSize: '0.9rem', color: '#334155' }}>{item.word}</span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: '800', background: '#e0e7ff', color: '#3730a3', padding: '2px 8px', borderRadius: '8px' }}>
                       Used {item.count}x
                     </span>
                   </div>
@@ -423,9 +314,7 @@ function Vocabulary({ student }) {
             </div>
           </div>
         </div>
-
       </div>
-
     </div>
   );
 }
