@@ -178,7 +178,7 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
 
                       return (
                         <div key={task.lessonId} className={taskClass} onClick={() => {
-                          if (isCurrent) onNewSession();
+                          if (!isLocked) onNewSession(task);
                         }}>
                           <div className="task-icon-area">
                             <div className={`task-icon ${isPassed ? 'check' : isCurrent ? 'play' : 'lock'}`}>

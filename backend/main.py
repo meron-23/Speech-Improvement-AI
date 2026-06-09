@@ -363,6 +363,27 @@ class SessionSaveRequest(BaseModel):
     feedback: object
     lessonId: str = None
 
+def _matches_objective(conversation: list, objective: str) -> bool:
+    if not objective:
+        return False
+    user_text = " ".join([msg.get("text", "") for msg in conversation if msg.get("role") == "user"]).lower()
+    if len(user_text) < 20:
+        return False
+    import re
+    stop_words = {
+        'and', 'the', 'to', 'a', 'an', 'of', 'for', 'in', 'on', 'at', 'with', 'is', 'are', 'be',
+        'by', 'about', 'that', 'this', 'it', 'you', 'your', 'who', 'how', 'why', 'as', 'from',
+        'or', 'new', 'very', 'can', 'must', 'should', 'will', 'would', 'could', 'their', 'they',
+        'them', 'we', 'our', 'us', 'when', 'where', 'which', 'what', 'must', 'into', 'just', 'also'
+    }
+    objective_words = [w for w in re.findall(r"\w+", objective.lower()) if w not in stop_words and len(w) > 2]
+    if not objective_words:
+        return False
+    unique_words = set(objective_words)
+    matches = sum(1 for word in unique_words if word in user_text)
+    required_matches = max(2, min(5, len(unique_words) // 2))
+    return matches >= required_matches
+
 @app.post("/session/save")
 async def save_session(req: SessionSaveRequest):
     if not db:
@@ -384,7 +405,7 @@ async def save_session(req: SessionSaveRequest):
             
             # Check if conversation is too short to pass
             user_turns = len([msg for msg in req.conversation if msg['role'] == 'user'])
-            if user_turns < 2:
+            if user_turns < 3:
                 passed = False
             elif groq_key:
                 try:
@@ -392,7 +413,7 @@ async def save_session(req: SessionSaveRequest):
                     groq_client = Groq(api_key=groq_key)
                     
                     transcript = "\n".join([f"{msg['role']}: {msg['text']}" for msg in req.conversation])
-                    eval_prompt = f"""You are a supportive language instructor. Review this English learning conversation and decide whether the student made a good enough effort to progress.
+                    eval_prompt = f"""You are a supportive language instructor. Review this English learning conversation and decide whether the student achieved the stated lesson objective.
 Student Level: {req.cefrLevel}
 Objective: {objective}
 
@@ -400,10 +421,10 @@ Conversation:
 {transcript}
 
 Assessment guidance:
-1. For A1/A2, accept short or partially formed sentences as long as the student clearly tries to meet the objective in English.
-2. Reward understandable responses and correct intent even when there are minor grammar or punctuation mistakes.
-3. For B1/B2, focus on whether the student uses clear, relevant English rather than perfect grammar.
-4. Only answer NO when the response is unrelated, not in English, or shows no real attempt to satisfy the objective.
+1. For A1/A2, accept short or partially formed sentences as long as the student clearly attempts the objective in English.
+2. Reward understandable responses and correct intent, not perfect grammar.
+3. For B1/B2, focus on whether the student uses clear, relevant English to fulfill the objective.
+4. Only answer NO when the response is unrelated, not in English, or does not satisfy the objective.
 
 Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                     
@@ -417,12 +438,12 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                         passed = True
                 except Exception as e:
                     print(f"Evaluation error: {e}")
-                    # If the AI evaluation fails, allow passing when the student has a real attempt at the lesson.
-                    if user_turns >= 2:
+                    if user_turns >= 4 and _matches_objective(req.conversation, objective):
                         passed = True
             else:
-                # When no Groq evaluator is configured, use a lenient fallback for real practice sessions.
-                passed = user_turns >= 2
+                # When no Groq evaluator is configured, only pass if the conversation clearly meets the lesson objective.
+                if user_turns >= 4 and _matches_objective(req.conversation, objective):
+                    passed = True
 
     # 2. Update Student Progress if passed
     if passed:

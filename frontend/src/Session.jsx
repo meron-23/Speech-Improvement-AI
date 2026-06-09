@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import API_BASE_URL from './config';
 import { ArrowLeft, CheckCircle2, HelpCircle, Lightbulb, Mic, Loader2, Sparkles } from 'lucide-react';
 
@@ -81,7 +81,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     setVadState(newState);
   };
 
-  const stopMedia = () => {
+  function stopMedia() {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -97,13 +97,13 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       dgConnectionRef.current.close();
       dgConnectionRef.current = null;
     }
-    if (currentAudioRef.current) { 
-      currentAudioRef.current.pause(); 
-      currentAudioRef.current = null; 
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
     }
     audioQueueRef.current = [];
     isPlayingRef.current = false;
-  };
+  }
 
   // --- Backend WebSocket (Groq + Cartesia) ---
   const connectBackendWebSocket = () => {
@@ -284,7 +284,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       connection.onclose = () => {
         if (!isEndingRef.current && vadStateRef.current !== 'ERROR') {
           console.log("Deepgram connection closed unexpectedly. Reconnecting...");
-          setTimeout(() => connectDeepgram(deepgramKeyRef.current), 1000);
+          setTimeout(startDeepgram, 1000);
         }
       };
 
@@ -541,6 +541,11 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     return (
       <div className="assessment-shell">
         <div className="assessment-content">
+          <div className="session-result-banner" style={{ marginBottom: '1rem', padding: '1rem 1.25rem', borderRadius: '16px', background: outcome?.passed ? '#ecfdf5' : '#f8d7da', border: `1px solid ${outcome?.passed ? '#10b981' : '#ef4444'}`, color: outcome?.passed ? '#065f46' : '#991b1b' }}>
+            <strong style={{ display: 'block', fontSize: '1.05rem', marginBottom: '0.25rem' }}>{outcome?.passed ? 'Session passed!' : 'Session not passed yet'}</strong>
+            <span>{outcome?.passed ? 'Great work — you met the lesson objective and can continue to the next lesson.' : 'Keep practicing this lesson until you satisfy the objective.'}</span>
+          </div>
+
           <div className="assessment-heading">
             <h2>Your results are ready</h2>
             <p>{report.summary || "Here is your assessment summary based on the answers you completed."}</p>

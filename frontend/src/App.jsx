@@ -13,6 +13,7 @@ function App() {
   const [currentView, setCurrentView] = useState('LOADING');
   const [student, setStudent] = useState(null);
   const [showTestPrompt, setShowTestPrompt] = useState(false);
+  const [selectedLesson, setSelectedLesson] = useState(null);
 
   // --- Shared cached data (fetched once, passed as props) ---
   const [sharedSessions, setSharedSessions] = useState([]);
@@ -126,7 +127,10 @@ function App() {
               sessions={sharedSessions}
               lessons={sharedLessons}
               dataLoading={dataLoading}
-              onNewSession={() => setCurrentView('SESSION')}
+              onNewSession={(lesson) => {
+                setSelectedLesson(lesson || null);
+                setCurrentView('SESSION');
+              }}
               onViewHistory={() => setCurrentView('HISTORY')}
             />
           )}
@@ -134,11 +138,16 @@ function App() {
           {currentView === 'SESSION' && (
             <Session 
               student={student} 
-              onViewDashboard={() => setCurrentView('DASHBOARD')}
+              customLesson={selectedLesson}
+              onViewDashboard={() => {
+                setSelectedLesson(null);
+                setCurrentView('DASHBOARD');
+              }}
               onSessionComplete={(updatedStudent) => {
                 setStudent(updatedStudent);
                 localStorage.setItem('speech_ai_student', JSON.stringify(updatedStudent));
                 if (updatedStudent.levelComplete) setShowTestPrompt(true);
+                setSelectedLesson(null);
                 // Refresh sessions cache after a new session is saved
                 fetchSharedData(updatedStudent);
               }}
@@ -160,7 +169,10 @@ function App() {
               sessions={sharedSessions}
               lessons={sharedLessons}
               dataLoading={dataLoading}
-              onStartLesson={() => setCurrentView('SESSION')}
+              onStartLesson={(lesson) => {
+                setSelectedLesson(lesson || null);
+                setCurrentView('SESSION');
+              }}
             />
           )}
 
