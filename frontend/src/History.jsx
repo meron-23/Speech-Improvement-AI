@@ -1,14 +1,41 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import API_BASE_URL from './config';
 
-function History({ student, sessions, dataLoading, onBack }) {
+function History({ student, sessions, dataLoading }) {
   const [selectedSession, setSelectedSession] = useState(null);
+  const [selectedMetric, setSelectedMetric] = useState(null);
+
+  const getSessionReport = (session) => {
+    const report = parseFeedbackReport(session?.feedback);
+    if (!report?.metrics?.length) return null;
+    return {
+      ...report,
+      metrics: report.metrics.filter(metric => ['Grammar', 'Accuracy'].includes(metric.name))
+    };
+  };
+
+  const getMetricByName = (session, name) => getSessionReport(session)?.metrics.find(metric => metric.name === name);
 
   // Sort sessions newest-first from the shared prop
   const sortedSessions = [...sessions].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
   const handleExport = () => {
     window.open(`${API_BASE_URL}/export`, '_blank');
+  };
+
+  const parseFeedbackReport = (feedback) => {
+    if (!feedback) return null;
+    if (typeof feedback === 'object') return feedback;
+    try {
+      return JSON.parse(feedback);
+    } catch {
+      return null;
+    }
+  };
+
+  const metricColors = {
+    Grammar: '#10b981',
+    Accuracy: '#8b5cf6'
   };
 
   if (selectedSession) {
@@ -42,49 +69,110 @@ function History({ student, sessions, dataLoading, onBack }) {
           </div>
 
           <div className="card" style={{ background: 'white', padding: '2rem' }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '2rem', textAlign: 'center', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>AI Mission Report</h3>
-            <div className="feedback-grid" style={{ display: 'grid', gap: '1.25rem' }}>
-              {(() => {
-                const cleanFeedback = (selectedSession.feedback || "")
-                  .replace(/#{1,6}\s?/g, '')
-                  .replace(/>{1,2}\s?/g, '')
-                  .replace(/\*\*/g, '')
-                  .replace(/\*/g, '')
-                  .trim();
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '2rem', textAlign: 'center', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Assessment Report</h3>
+            {(() => {
+              const report = getSessionReport(selectedSession);
+              const metric = selectedMetric ? getMetricByName(selectedSession, selectedMetric) : null;
 
-                let sections = cleanFeedback.split(/(?=🌟|🛠️|🔥)/);
-                if (sections.length <= 1 && cleanFeedback.includes('\n\n')) {
-                  sections = cleanFeedback.split('\n\n');
-                }
+              if (metric) {
+                return (
+                  <div style={{ display: 'grid', gap: '1.25rem' }}>
+                    <button
+                      onClick={() => setSelectedMetric(null)}
+                      style={{ alignSelf: 'start', padding: '0.75rem 1rem', borderRadius: '999px', border: '1px solid #e2e8f0', background: '#f8fafc', color: 'var(--text-main)', cursor: 'pointer', fontWeight: '700' }}
+                    >
+                      ← Back to assessment
+                    </button>
 
-                return sections.map((section, idx) => {
-                  if (!section.trim()) return null;
-                  const isStrength = section.includes('🌟') || idx === 0;
-                  const isFix = section.includes('🛠️') || idx === 1;
-                  const isChallenge = section.includes('🔥') || idx >= 2;
-
-                  let bgColor = '#f8fafc', borderColor = '#e2e8f0';
-                  if (isStrength) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; }
-                  if (isFix) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; }
-                  if (isChallenge) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; }
-
-                  const title = section.includes(':') ? section.split(':')[0] : (isStrength ? '🌟 Strengths' : (isFix ? '🛠️ Quick Fixes' : '🔥 Next Mission'));
-                  const content = section.includes(':') ? section.split(':').slice(1).join(':').trim() : section.trim();
-                  const iconColor = isStrength ? '#16a34a' : isFix ? '#d97706' : '#2563eb';
-
-                  return (
-                    <div key={idx} style={{ backgroundColor: bgColor, padding: '1.25rem', borderRadius: '16px', border: `1px solid ${borderColor}`, fontSize: '0.95rem', lineHeight: '1.6' }}>
-                      <div style={{ fontWeight: '800', color: iconColor, marginBottom: '0.5rem', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                        {title}
+                    <div style={{ display: 'grid', gap: '1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: '1rem' }}>
+                        <span>{metric.name} Details</span>
+                        <span>{metric.percent}%</span>
                       </div>
-                      <div style={{ color: '#334155', whiteSpace: 'pre-wrap' }}>
-                        {content}
+                      <div style={{ height: '10px', background: '#ffffff', borderRadius: '999px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${metric.percent}%`, background: metricColors[metric.name] || 'var(--primary)' }} />
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
+                        <div style={{ marginBottom: '0.75rem' }}><strong>Total answers:</strong> {metric.totalQuestions}</div>
+                        <div style={{ marginBottom: '0.75rem' }}><strong>Score earned:</strong> {metric.correct}</div>
+                        <div><strong>Score missed:</strong> {metric.missing}</div>
+                      </div>
+                      <div style={{ padding: '1rem', borderRadius: '16px', background: '#f8fafc' }}>
+                        <h4 style={{ marginBottom: '0.75rem', fontWeight: '700' }}>Review</h4>
+                        {metric.review?.length ? metric.review.map((item, idx) => (
+                          <div key={`${metric.name}-${idx}`} style={{ marginBottom: '0.85rem' }}>
+                            <div style={{ fontWeight: 700 }}>{item.answer || `Answer ${idx + 1}`}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.92rem', marginTop: '0.25rem' }}>
+                              {item.status === 'correct'
+                                ? 'Strong answer'
+                                : item.status === 'partial'
+                                  ? item.issue || 'Partly correct'
+                                  : item.issue || 'Needs improvement'}
+                              {(item.status !== 'correct' && item.suggestion)
+                                ? ` Suggestion: ${item.suggestion}`
+                                : ''}
+                            </div>
+                          </div>
+                        )) : <div style={{ color: 'var(--text-muted)' }}>No detailed review available for this metric.</div>}
+                      </div>
+                      <div style={{ padding: '1rem', borderRadius: '16px', background: '#f8fafc', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 700 }}>Quick Tip:</span>
+                        <span>{metric.quickTip || 'Keep speaking clearly and directly.'}</span>
                       </div>
                     </div>
-                  );
-                });
-              })()}
-            </div>
+                  </div>
+                );
+              }
+
+              if (report?.metrics?.length) {
+                return (
+                  <div style={{ display: 'grid', gap: '1.25rem' }}>
+                    {report.metrics.map(metric => (
+                      <button
+                        key={metric.name}
+                        onClick={() => setSelectedMetric(metric.name)}
+                        style={{
+                          textAlign: 'left',
+                          background: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '14px',
+                          padding: '1rem',
+                          cursor: 'pointer',
+                          transition: 'background 0.2s',
+                          width: '100%'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, marginBottom: '0.75rem' }}>
+                          <span>{metric.name}</span>
+                          <span>{metric.percent}%</span>
+                        </div>
+                        <div style={{ height: '10px', background: '#ffffff', borderRadius: '999px', overflow: 'hidden', marginBottom: '0.75rem' }}>
+                          <div style={{ height: '100%', width: `${metric.percent}%`, background: metricColors[metric.name] || 'var(--primary)' }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                          <span>{metric.correct} earned</span>
+                          <span>{metric.missing} missed</span>
+                          <span>{metric.totalQuestions} answers</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                );
+              }
+
+              const cleanFeedback = (selectedSession.feedback || "")
+                .replace(/#{1,6}\s?/g, '')
+                .replace(/>{1,2}\s?/g, '')
+                .replace(/\*\*/g, '')
+                .replace(/\*/g, '')
+                .trim();
+
+              return (
+                <div style={{ backgroundColor: '#f8fafc', padding: '1.25rem', borderRadius: '16px', border: '1px solid #e2e8f0', fontSize: '0.95rem', lineHeight: '1.6', color: '#334155', whiteSpace: 'pre-wrap' }}>
+                  {cleanFeedback || 'No feedback was saved for this session.'}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -135,7 +223,10 @@ function History({ student, sessions, dataLoading, onBack }) {
                   </td>
                   <td style={{ padding: '1.25rem', textAlign: 'right' }}>
                     <button
-                      onClick={() => setSelectedSession(session)}
+                      onClick={() => {
+                        setSelectedSession(session);
+                        setSelectedMetric(null);
+                      }}
                       className="nav-item"
                       style={{ width: 'auto', display: 'inline-flex', padding: '8px 16px', background: 'rgba(158, 40, 145, 0.05)', color: 'var(--primary)', fontSize: '0.85rem' }}
                     >

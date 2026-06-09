@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import API_BASE_URL from './config';
-import { Mic, Loader2, Sparkles } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, HelpCircle, Lightbulb, Mic, Loader2, Sparkles } from 'lucide-react';
 
 function Session({ student, customLesson, onViewDashboard, onSessionComplete }) {
   const [conversation, setConversation] = useState([]);
@@ -9,6 +9,8 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isServerReady, setIsServerReady] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [feedbackReport, setFeedbackReport] = useState(null);
+  const [selectedMetric, setSelectedMetric] = useState(null);
   const [outcome, setOutcome] = useState(null);
   const [isEnding, setIsEnding] = useState(false);
   const [sttError, setSttError] = useState(null);
@@ -16,6 +18,11 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   const activeLesson = customLesson || student.currentLesson;
 
   const MAX_TURNS = 10; 
+  const RESULT_METRICS = ['Grammar', 'Accuracy'];
+  const METRIC_COLORS = {
+    Grammar: '#10b981',
+    Accuracy: '#8b5cf6'
+  };
   const chatEndRef = useRef(null);
   const vadStateRef = useRef('IDLE');
   const conversationRef = useRef([]);
@@ -187,21 +194,9 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       }
       if (data.type === 'done') {
         if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
-          // Fallback to browser's native SpeechSynthesis if Cartesia audio failed
-          if ('speechSynthesis' in window && data.full_text) {
-            updateVadState('AI_SPEAKING');
-            const utterance = new SpeechSynthesisUtterance(data.full_text);
-            const voices = window.speechSynthesis.getVoices();
-            const englishVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Female') || v.name.includes('Google'))) || voices.find(v => v.lang.startsWith('en'));
-            if (englishVoice) utterance.voice = englishVoice;
-            
-            utterance.onend = () => handleTurnEnd();
-            utterance.onerror = () => handleTurnEnd();
-            
-            window.speechSynthesis.speak(utterance);
-          } else {
-            handleTurnEnd();
-          }
+          // No audio was received (Google Translate TTS may have failed).
+          // Skip audio gracefully and proceed to the next turn.
+          handleTurnEnd();
         }
       }
     };
@@ -304,7 +299,14 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
         mediaRecorderRef.current = mediaRecorder;
 
         mediaRecorder.addEventListener('dataavailable', event => {
-          if (event.data.size > 0 && dgConnectionRef.current?.readyState === WebSocket.OPEN) {
+          // Only forward audio to Deepgram when we are actively LISTENING.
+          // This prevents the AI's own TTS audio (echo) or ambient noise during
+          // PROCESSING / AI_SPEAKING from being transcribed as user speech.
+          if (
+            event.data.size > 0 &&
+            dgConnectionRef.current?.readyState === WebSocket.OPEN &&
+            vadStateRef.current === 'LISTENING'
+          ) {
             dgConnectionRef.current.send(event.data);
           }
         });
@@ -395,10 +397,16 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       const feedbackRes = await fetch(`${API_BASE_URL}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation: conversationRef.current })
+        body: JSON.stringify({
+          conversation: conversationRef.current,
+          cefrLevel: student.cefrLevel,
+          lesson: activeLesson
+        })
       });
       const feedbackData = await feedbackRes.json();
-      const feedbackText = feedbackData.feedback || "Good job practicing!";
+      const report = feedbackData.report || parseFeedbackReport(feedbackData.feedback);
+      const feedbackText = feedbackData.feedback || JSON.stringify(report || {});
+      setFeedbackReport(report);
       setFeedback(feedbackText);
 
       const saveRes = await fetch(`${API_BASE_URL}/session/save`, {
@@ -462,10 +470,205 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     setOutcome(null);
     setIsEnding(false);
     setIsSessionActive(false);
+    setFeedbackReport(null);
+    setSelectedMetric(null);
     updateVadState('IDLE');
     setFeedback("");
     setUserTurnCount(0);
     if (wsRef.current) wsRef.current.close();
+  };
+
+  const parseFeedbackReport = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  };
+
+  const getReport = () => {
+    const report = feedbackReport || parseFeedbackReport(feedback);
+    if (report?.metrics?.length) {
+      const visibleMetrics = report.metrics.filter(metric => RESULT_METRICS.includes(metric.name));
+      if (visibleMetrics.length) {
+        return {
+          ...report,
+          metrics: visibleMetrics
+        };
+      }
+    }
+
+    const answers = conversationRef.current.filter(msg => msg.role === 'user');
+    const percent = answers.length ? 100 : 0;
+    return {
+      summary: "Here is your assessment summary based on the answers you completed.",
+      metrics: RESULT_METRICS.map(name => ({
+        name,
+        percent,
+        totalQuestions: answers.length,
+        correct: answers.length,
+        missing: 0,
+        review: answers.map(msg => ({
+          answer: msg.text,
+          status: 'correct',
+          score: 1,
+          issue: '',
+          suggestion: 'Nice clear response.'
+        })),
+        quickTip: name === 'Grammar'
+          ? 'Use full basic patterns: subject + verb + object.'
+          : 'Answer the question directly and include the key details.'
+      }))
+    };
+  };
+
+  const getMetricByName = (name) => getReport().metrics.find(metric => metric.name === name);
+
+  const renderScoreBar = (metric) => {
+    const color = METRIC_COLORS[metric.name] || '#9E2891';
+    return (
+      <div className="result-card-bar">
+        <div className="result-card-fill" style={{ width: `${Math.max(0, Math.min(metric.percent, 100))}%`, background: color }} />
+      </div>
+    );
+  };
+
+  const renderResultsOverview = () => {
+    const report = getReport();
+    const totalQuestions = report.metrics[0]?.totalQuestions || 0;
+    return (
+      <div className="assessment-shell">
+        <div className="assessment-content">
+          <div className="assessment-heading">
+            <h2>Your results are ready</h2>
+            <p>{report.summary || "Here is your assessment summary based on the answers you completed."}</p>
+          </div>
+
+          <div className="result-summary-strip">
+            <span>Total answers</span>
+            <strong>{totalQuestions}</strong>
+          </div>
+
+          <div className="result-metric-grid">
+            {report.metrics.map(metric => (
+              <div className="result-metric-card" key={metric.name}>
+                <div className="result-card-header">
+                  <span>{metric.name}</span>
+                  <strong>{metric.percent}%</strong>
+                </div>
+                {renderScoreBar(metric)}
+                <button className="detail-button" type="button" onClick={() => setSelectedMetric(metric.name)}>
+                  View Detail
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="result-actions">
+            {outcome?.passed ? (
+              <button className="primary-result-btn" type="button" onClick={handleNextLesson}>
+                Next Lesson{outcome.nextLesson?.title ? `: ${outcome.nextLesson.title}` : ''}
+              </button>
+            ) : (
+              <button className="primary-result-btn" type="button" onClick={handleRetry}>
+                Practice Again
+              </button>
+            )}
+            <button className="secondary-result-btn" type="button" onClick={() => setSelectedMetric(report.metrics[0]?.name)}>
+              View Result Details
+            </button>
+            <button className="text-result-btn" type="button" onClick={onViewDashboard}>
+              Return to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderMetricDetail = () => {
+    const metric = getMetricByName(selectedMetric) || getReport().metrics[0];
+    if (!metric) return renderResultsOverview();
+    const color = METRIC_COLORS[metric.name] || '#9E2891';
+
+    return (
+      <div className="assessment-shell">
+        <div className="detail-top">
+          <button className="back-icon-btn" type="button" onClick={() => setSelectedMetric(null)} aria-label="Back to results">
+            <ArrowLeft size={20} />
+          </button>
+          <span>Result details</span>
+        </div>
+        <div className="assessment-content detail">
+          <h2 className="metric-title" style={{ color }}>{metric.name}</h2>
+          <div className="score-ring" style={{ background: `conic-gradient(${color} ${metric.percent * 3.6}deg, #eef2f7 0deg)` }}>
+            <div className="score-ring-inner">{metric.percent}%</div>
+          </div>
+          <p className="metric-note">
+            {metric.percent >= 90
+              ? "Strong work across the answers for this metric."
+              : `This score is based on ${metric.totalQuestions} answers, with partial credit for understandable responses.`}
+          </p>
+
+          <div className="review-panel">
+            <h3>Conversation Review</h3>
+            <div className="review-list">
+              {(metric.review || []).map((item, idx) => {
+                const isCorrect = item.status === 'correct';
+                const isPartial = item.status === 'partial';
+                return (
+                  <div className="review-item" key={`${metric.name}-${idx}`}>
+                    <div className={`review-status ${isCorrect ? 'correct' : isPartial ? 'partial' : 'missing'}`}>
+                      {isCorrect ? <CheckCircle2 size={14} /> : <HelpCircle size={14} />}
+                    </div>
+                    <div>
+                      <p>{item.answer || `Answer ${idx + 1}`}</p>
+                      <span>{isCorrect
+                        ? 'Strong answer'
+                        : isPartial
+                          ? item.issue || 'Partly correct'
+                          : item.issue || 'Needs improvement'}{!isCorrect && item.suggestion ? ` Suggestion: ${item.suggestion}` : ''}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="summary-panel">
+            <h3>Summary</h3>
+            <div><span>Total answers</span><strong>{metric.totalQuestions}</strong></div>
+            <div><span>Score earned</span><strong className="positive">{metric.correct}</strong></div>
+            <div><span>Score missed</span><strong className="negative">{metric.missing}</strong></div>
+          </div>
+
+          <div className="quick-tip">
+            <Lightbulb size={18} />
+            <div>
+              <strong>Quick Tip</strong>
+              <span>{metric.quickTip}</span>
+            </div>
+          </div>
+
+          <div className="detail-actions">
+            <button className="secondary-result-btn" type="button" onClick={() => {
+              const metrics = getReport().metrics;
+              const currentIndex = metrics.findIndex(item => item.name === metric.name);
+              const nextMetric = metrics[currentIndex + 1];
+              if (nextMetric) setSelectedMetric(nextMetric.name);
+              else setSelectedMetric(null);
+            }}>
+              Next Metric
+            </button>
+            <button className="primary-result-btn" type="button" onClick={handleRetry}>
+              Practice Again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderIndicator = () => {
@@ -494,51 +697,9 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
         </div>
       )}
       {outcome && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.95)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
-          <div style={{ maxWidth: '500px', width: '100%', backgroundColor: 'white', borderRadius: '24px', padding: '2.5rem', textAlign: 'center', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '1px solid #f1f5f9' }}>
-            <div style={{ width: '80px', height: '80px', borderRadius: '50%', margin: '0 auto 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', backgroundColor: outcome.passed ? '#d1fae5' : '#ffedd5', color: outcome.passed ? '#059669' : '#d97706' }}>
-              {outcome.passed ? '🏆' : '🎯'}
-            </div>
-            <h2 style={{ fontSize: '1.75rem', fontWeight: '800', marginBottom: '0.5rem', color: '#1e293b' }}>
-              {outcome.passed ? 'Mission Accomplished!' : 'Mission Incomplete'}
-            </h2>
-            <p style={{ color: '#64748b', marginBottom: '2rem', lineHeight: '1.6' }}>
-              {outcome.passed ? "Excellent communication! You've successfully achieved the objective for this lesson." : "You're getting closer! The objective wasn't quite met this time, but every conversation makes you stronger."}
-            </p>
-            <div className="feedback-grid" style={{ textAlign: 'left', marginBottom: '2rem', display: 'grid', gap: '1rem', maxHeight: '300px', overflowY: 'auto', padding: '0.5rem' }}>
-              {(() => {
-                const cleanFeedback = (feedback || "").replace(/#{1,6}\s?/g, '').replace(/>{1,2}\s?/g, '').replace(/\*\*/g, '').replace(/\*/g, '').trim();
-                let sections = cleanFeedback.split(/(?=💬|🎯|💡|🌟|🛠️|🔥)/);
-                if (sections.length <= 1 && cleanFeedback.includes('\n\n')) sections = cleanFeedback.split('\n\n');
-                return sections.map((section, idx) => {
-                  if (!section.trim()) return null;
-                  const isYouSaid = section.includes('💬');
-                  const isAccuracy = section.includes('🎯');
-                  const isReason = section.includes('💡');
-                  
-                  const isStrength = section.includes('🌟') || idx === 0;
-                  const isFix = section.includes('🛠️') || idx === 1;
-                  const isChallenge = section.includes('🔥') || idx >= 2;
-
-                  let bgColor = '#f8fafc', borderColor = '#e2e8f0', iconColor = '#64748b';
-                  if (isYouSaid) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; iconColor = '#2563eb'; }
-                  else if (isAccuracy) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; iconColor = '#16a34a'; }
-                  else if (isReason) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; iconColor = '#d97706'; }
-                  else if (isStrength) { bgColor = '#f0fdf4'; borderColor = '#bbf7d0'; iconColor = '#16a34a'; }
-                  else if (isFix) { bgColor = '#fffbeb'; borderColor = '#fef3c7'; iconColor = '#d97706'; }
-                  else if (isChallenge) { bgColor = '#eff6ff'; borderColor = '#dbeafe'; iconColor = '#2563eb'; }
-
-                  const title = section.includes(':') ? section.split(':')[0] : (isYouSaid ? '💬 You Said' : (isAccuracy ? '🎯 Accuracy' : (isReason ? '💡 Reason & Fix' : (isStrength ? '🌟 Strengths' : (isFix ? '🛠️ Quick Fixes' : '🔥 Next Mission')))));
-                  const content = section.includes(':') ? section.split(':').slice(1).join(':').trim() : section.trim();
-                  return (
-                    <div key={idx} style={{ backgroundColor: bgColor, padding: '1.25rem', borderRadius: '16px', border: `1px solid ${borderColor}`, fontSize: '0.95rem', lineHeight: '1.6' }}>
-                      <div style={{ fontWeight: '800', color: iconColor, marginBottom: '0.5rem', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title}</div>
-                      <div style={{ color: '#334155', whiteSpace: 'pre-wrap' }}>{content}</div>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
+        <div className="assessment-overlay">
+          {selectedMetric ? renderMetricDetail() : renderResultsOverview()}
+          <div className="assessment-level-complete">
             {outcome.levelComplete && (
               <>
                 <p style={{ color: '#64748b', marginBottom: '1rem' }}>You have completed the current CEFR level! Please take the external CEFR test to determine your new level.</p>
@@ -560,16 +721,6 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
                 </button>
               </>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {outcome.passed ? (
-                <button className="primary-btn" onClick={handleNextLesson} style={{ width: '100%', padding: '1rem', borderRadius: '12px', background: '#86198f', color: 'white', fontWeight: '700', border: 'none', cursor: 'pointer' }}>
-                  Next Lesson: {outcome.nextLesson?.title || "Level Up"}
-                </button>
-              ) : (
-                <button className="primary-btn" onClick={handleRetry} style={{ width: '100%', padding: '1rem', borderRadius: '12px', background: '#86198f', color: 'white', fontWeight: '700', border: 'none', cursor: 'pointer' }}>Try Again</button>
-              )}
-              <button className="secondary-btn" onClick={onViewDashboard} style={{ width: '100%', padding: '1rem', background: 'transparent', border: '1px solid #e2e8f0', borderRadius: '12px', color: '#64748b', fontWeight: '600', cursor: 'pointer' }}>Return to Dashboard</button>
-            </div>
           </div>
         </div>
       )}

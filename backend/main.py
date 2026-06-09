@@ -248,8 +248,7 @@ async def chat_stream(websocket: WebSocket):
     await websocket.accept()
     
     groq_key = os.environ.get("GROQ_API_KEY")
-    cartesia_key = os.environ.get("CARTESIA_API_KEY")
-    if not groq_key or not cartesia_key:
+    if not groq_key:
         await websocket.close(code=1008)
         return
         
@@ -325,36 +324,25 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                     "text": full_ai_text
                 })
                 
-                # Use Cartesia to generate audio instantly
+                # Use Google Translate TTS (free) instead of Cartesia
                 try:
-                    tts_resp = requests.post(
-                        "https://api.cartesia.ai/tts/bytes",
-                        headers={
-                            "X-API-Key": cartesia_key,
-                            "Cartesia-Version": "2024-06-10",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model_id": "sonic-3.5",
-                            "transcript": full_ai_text,
-                            "voice": {
-                                "mode": "id",
-                                "id": "a0e99841-438c-4a64-b679-ae501e7d6091" # English Woman
-                            },
-                            "output_format": {
-                                "container": "mp3",
-                                "encoding": "mp3",
-                                "sample_rate": 44100
-                            }
-                        }
-                    )
-                    if tts_resp.status_code == 200:
-                        audio_base64 = base64.b64encode(tts_resp.content).decode("utf-8")
+                    from urllib.parse import quote
+                    max_chunk_size = 200
+                    text_to_speak = full_ai_text
+                    chunks = [text_to_speak[i:i + max_chunk_size] for i in range(0, len(text_to_speak), max_chunk_size)]
+                    combined_audio = b""
+                    for chunk in chunks:
+                        encoded_chunk = quote(chunk)
+                        tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
+                        tts_resp = requests.get(tts_url, headers={"User-Agent": "Mozilla/5.0"})
+                        if tts_resp.status_code == 200:
+                            combined_audio += tts_resp.content
+                    if combined_audio:
+                        audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
                         await websocket.send_json({"type": "audio", "audio": audio_base64})
-                    else:
-                        print("Cartesia TTS Error:", tts_resp.text)
                 except Exception as tts_err:
-                    print("Cartesia exception:", tts_err)
+                    print("Google TTS exception:", tts_err)
+
 
                 # Signal end of turn
                 await websocket.send_json({"type": "done", "full_text": full_ai_text.strip()})
@@ -372,7 +360,7 @@ class SessionSaveRequest(BaseModel):
     cefrLevel: str
     timestamp: str
     conversation: list
-    feedback: str
+    feedback: object
     lessonId: str = None
 
 @app.post("/session/save")
@@ -404,23 +392,20 @@ async def save_session(req: SessionSaveRequest):
                     groq_client = Groq(api_key=groq_key)
                     
                     transcript = "\n".join([f"{msg['role']}: {msg['text']}" for msg in req.conversation])
-                    eval_prompt = f"""You are a STRICT language instructor. Review this English learning conversation.
+                    eval_prompt = f"""You are a supportive language instructor. Review this English learning conversation and decide whether the student made a good enough effort to progress.
 Student Level: {req.cefrLevel}
 Objective: {objective}
 
 Conversation:
 {transcript}
 
-Did the student clearly and explicitly achieve the objective? 
+Assessment guidance:
+1. For A1/A2, accept short or partially formed sentences as long as the student clearly tries to meet the objective in English.
+2. Reward understandable responses and correct intent even when there are minor grammar or punctuation mistakes.
+3. For B1/B2, focus on whether the student uses clear, relevant English rather than perfect grammar.
+4. Only answer NO when the response is unrelated, not in English, or shows no real attempt to satisfy the objective.
 
-STRICT Grading Standards:
-1. The student MUST have fulfilled the specific objective mentioned above. If they just said "hello" or gave generic/unrelated answers, they FAIL.
-2. If the student spoke in a language other than English, they FAIL.
-3. If the student gave extremely short, unengaged answers without demonstrating the required language skills, they FAIL.
-4. For A1/A2: They must attempt basic communication directly related to the goal.
-5. For B1/B2: They must use proper sentence structure and actively drive the conversation toward the goal.
-
-Answer ONLY with 'YES' or 'NO'. Do not provide any other text. If in doubt, answer 'NO'."""
+Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                     
                     response = groq_client.chat.completions.create(
                         model="llama-3.1-8b-instant",
@@ -432,6 +417,12 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text. If in doubt, answ
                         passed = True
                 except Exception as e:
                     print(f"Evaluation error: {e}")
+                    # If the AI evaluation fails, allow passing when the student has a real attempt at the lesson.
+                    if user_turns >= 2:
+                        passed = True
+            else:
+                # When no Groq evaluator is configured, use a lenient fallback for real practice sessions.
+                passed = user_turns >= 2
 
     # 2. Update Student Progress if passed
     if passed:
@@ -481,43 +472,145 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text. If in doubt, answ
 
 class FeedbackRequest(BaseModel):
     conversation: list
+    cefrLevel: str = "B1"
+    lesson: dict = None
+
+def _build_fallback_feedback(conversation: list):
+    user_answers = [msg.get("text", "") for msg in conversation if msg.get("role") == "user"]
+    total_questions = len(user_answers)
+    correct_count = total_questions if total_questions else 0
+    percent = round((correct_count / total_questions) * 100) if total_questions else 0
+    review = [
+        {
+            "answer": text,
+            "status": "correct",
+            "score": 1,
+            "issue": "",
+            "suggestion": "Nice clear response."
+        }
+        for text in user_answers
+    ]
+    metrics = []
+    for name in ["Grammar", "Accuracy"]:
+        metrics.append({
+            "name": name,
+            "percent": percent,
+            "totalQuestions": total_questions,
+            "correct": correct_count,
+            "missing": max(total_questions - correct_count, 0),
+            "review": review,
+            "quickTip": "Use full basic patterns: subject + verb + object." if name == "Grammar" else "Answer the question directly and include the key details."
+        })
+    return {
+        "summary": "Here is your speaking profile from the 4-minute assessment.",
+        "metrics": metrics
+    }
+
+def _normalize_feedback_report(raw_report: dict, conversation: list):
+    metric_names = ["Grammar", "Accuracy"]
+    user_answers = [msg.get("text", "") for msg in conversation if msg.get("role") == "user"]
+    total_questions = len(user_answers)
+    raw_metrics = raw_report.get("metrics", {}) if isinstance(raw_report, dict) else {}
+    normalized_metrics = []
+
+    for metric_name in metric_names:
+        raw_items = raw_metrics.get(metric_name, [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+
+        review = []
+        score_total = 0
+        for idx, answer in enumerate(user_answers):
+            raw_item = raw_items[idx] if idx < len(raw_items) and isinstance(raw_items[idx], dict) else {}
+            raw_score = raw_item.get("score")
+            if raw_score is None:
+                raw_score = 1 if raw_item.get("correct") else 0
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                score = 0
+            score = max(0, min(score, 1))
+            score_total += score
+            status = "correct" if score >= 0.75 else "partial" if score >= 0.35 else "missing"
+            review.append({
+                "answer": raw_item.get("answer") or answer,
+                "status": status,
+                "score": score,
+                "issue": raw_item.get("issue") or "",
+                "suggestion": raw_item.get("suggestion") or ""
+            })
+
+        percent = round((score_total / total_questions) * 100) if total_questions else 0
+        normalized_metrics.append({
+            "name": metric_name,
+            "percent": percent,
+            "totalQuestions": total_questions,
+            "correct": round(score_total, 1),
+            "missing": round(max(total_questions - score_total, 0), 1),
+            "review": review,
+            "quickTip": raw_report.get("quickTips", {}).get(metric_name, "Use full basic patterns: subject + verb + object." if metric_name == "Grammar" else "Answer the question directly and include the key details.") if isinstance(raw_report, dict) else ("Use full basic patterns: subject + verb + object." if metric_name == "Grammar" else "Answer the question directly and include the key details.")
+        })
+
+    return {
+        "summary": raw_report.get("summary", "Here is your speaking profile from the 4-minute assessment.") if isinstance(raw_report, dict) else "Here is your speaking profile from the 4-minute assessment.",
+        "metrics": normalized_metrics
+    }
 
 @app.post("/feedback")
 async def generate_feedback(req: FeedbackRequest):
     groq_key = os.environ.get("GROQ_API_KEY")
     if not groq_key:
-        return {"feedback": "Your pronunciation is very clear! One tip: make sure to use the present continuous tense correctly when talking about ongoing actions (e.g., 'I am practicing' instead of 'I practice')."}
+        report = _build_fallback_feedback(req.conversation)
+        return {"feedback": json.dumps(report), "report": report}
 
     try:
         from groq import Groq
         groq_client = Groq(api_key=groq_key)
         
         formatted_convo = []
+        answer_number = 0
         for msg in req.conversation:
             if msg['role'] == 'user':
-                formatted_convo.append(f"STUDENT SAID: {msg['text']}")
+                answer_number += 1
+                formatted_convo.append(f"ANSWER {answer_number}: {msg['text']}")
             else:
-                formatted_convo.append(f"COACH SAID: {msg['text']}")
+                formatted_convo.append(f"COACH: {msg['text']}")
         full_conversation = "\n".join(formatted_convo)
+        user_answer_count = answer_number
+        lesson_objective = req.lesson.get("objective") if req.lesson else "General English speaking practice"
         
-        prompt = f"""Analyze this English practice session.
-You are a direct, helpful coach focusing on grammar and accuracy!
-You MUST ONLY analyze the sentences labeled "STUDENT SAID". DO NOT analyze "COACH SAID".
+        prompt = f"""Analyze this English assessment conversation for a {req.cefrLevel} learner.
+Lesson objective: {lesson_objective}
 
-CRITICAL RULE: 
-- DO NOT use any Markdown formatting. 
-- DO NOT use hash symbols (#), stars (** or *), or greater-than symbols (>).
-- Use ONLY plain text with double line breaks for spacing.
+Return ONLY valid JSON. Do not include Markdown, comments, or prose outside the JSON.
 
-Format your response exactly like this:
-💬 YOU SAID:
-[Quote a specific sentence from "STUDENT SAID" that had a grammar mistake, or their best sentence if no mistakes]
+There are exactly {user_answer_count} student answers. Treat each student answer as one answered question.
+For Grammar and Accuracy, return exactly {user_answer_count} review objects in the same order as the answers.
+Score each answer with "score": 0, 0.5, or 1.
+Do not calculate percentages. The app will calculate each percentage from the average answer score.
 
-🎯 ACCURACY:
-[Give a % score for the student's grammar accuracy overall]
+Scoring rules:
+- Be fair to spoken beginner/intermediate English. Ignore capitalization and punctuation.
+- Grammar score 1 when the answer is understandable and mostly grammatical, even if it is short or has minor errors.
+- Grammar score 0.5 when the meaning is clear but there is a noticeable grammar issue.
+- Grammar score 0 only when grammar makes the answer hard to understand.
+- Accuracy score 1 when the answer reasonably responds to the coach or moves the conversation forward.
+- Accuracy score 0.5 when the answer is related or understandable but incomplete, awkward, or only partly responsive.
+- Accuracy score 0 only when the answer is unrelated, empty, or impossible to connect to the conversation.
+- Do not mark an answer wrong just because it is informal, brief, or not the best possible response.
 
-💡 REASON & FIX:
-[Explain why the student's quote was incorrect (or correct) and provide the improved version]
+JSON shape:
+{{
+  "summary": "short friendly summary",
+  "metrics": {{
+    "Grammar": [{{"answer": "student answer", "score": 1, "issue": "", "suggestion": ""}}],
+    "Accuracy": [{{"answer": "student answer", "score": 0.5, "issue": "", "suggestion": ""}}]
+  }},
+  "quickTips": {{
+    "Grammar": "one short tip",
+    "Accuracy": "one short tip"
+  }}
+}}
 
 Conversation:
 {full_conversation}"""
@@ -528,10 +621,17 @@ Conversation:
             temperature=0.7,
         )
 
-        return {"feedback": response.choices[0].message.content}
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            content = content.replace("json", "", 1).strip()
+        raw_report = json.loads(content)
+        report = _normalize_feedback_report(raw_report, req.conversation)
+        return {"feedback": json.dumps(report), "report": report}
     except Exception as e:
         print("Groq Feedback Exception:", str(e))
-        return {"feedback": "Your pronunciation is very clear! One tip: make sure to use the present continuous tense correctly when talking about ongoing actions (e.g., 'I am practicing' instead of 'I practice')."}
+        report = _build_fallback_feedback(req.conversation)
+        return {"feedback": json.dumps(report), "report": report}
 
 @app.get("/auth/deepgram")
 async def get_deepgram_token():
