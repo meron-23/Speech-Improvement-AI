@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, FileText, BarChart2, BookOpen, Settings, LogOut, ChevronDown, Mic } from 'lucide-react';
+import { Home, FileText, BarChart2, Settings, LogOut, ChevronDown, Mic } from 'lucide-react';
 
 function Layout({ student, currentView, setCurrentView, onLogout, children }) {
   return (
@@ -47,13 +47,7 @@ function Layout({ student, currentView, setCurrentView, onLogout, children }) {
             <BarChart2 size={20} className="nav-icon" />
             Progress
           </button>
-          <button 
-            className={`nav-item ${currentView === 'VOCABULARY' ? 'active' : ''}`}
-            onClick={() => setCurrentView('VOCABULARY')}
-          >
-            <BookOpen size={20} className="nav-icon" />
-            Vocabulary
-          </button>
+
           <button 
             className={`nav-item ${currentView === 'SETTINGS' ? 'active' : ''}`}
             onClick={() => setCurrentView('SETTINGS')}
