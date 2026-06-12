@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import hark from 'hark';
 import API_BASE_URL from './config';
 import { ArrowLeft, CheckCircle2, HelpCircle, Lightbulb, Mic, Loader2, Sparkles } from 'lucide-react';
 
@@ -23,6 +24,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     Grammar: '#10b981',
     Accuracy: '#8b5cf6'
   };
+  const LISTENING_DELAY_MS = 300;
   const chatEndRef = useRef(null);
   const vadStateRef = useRef('IDLE');
   const conversationRef = useRef([]);
@@ -42,6 +44,10 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   const microhponeStreamRef = useRef(null);
   const transcriptBufferRef = useRef([]);
   const silenceTimerRef = useRef(null);
+  const audioChunkBufferRef = useRef([]);
+  const headerChunkRef = useRef(null);
+  const speechFinalRef = useRef(false);
+  const speechActiveRef = useRef(false);
 
   useEffect(() => {
     conversationRef.current = conversation;
@@ -49,22 +55,11 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   }, [conversation, isEnding]);
 
   useEffect(() => {
-    // Fetch Deepgram Token
-    fetch(`${API_BASE_URL}/auth/deepgram`)
-      .then(res => res.json())
-      .then(data => {
-        deepgramKeyRef.current = data.key;
-        setIsServerReady(true);
-      })
-      .catch(err => {
-        console.error("Error fetching deepgram token", err);
-        setSttError("Could not connect to the backend server. It might be asleep. Please refresh.");
-      });
+    setIsServerReady(true);
 
     return () => {
       stopMedia();
       if (wsRef.current) wsRef.current.close();
-      if (dgConnectionRef.current) dgConnectionRef.current.close();
     };
   }, []);
 
@@ -77,11 +72,12 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   }, [conversation, vadState]);
 
   const updateVadState = (newState) => {
+    console.log(`[VAD STATE] ${vadStateRef.current} → ${newState}`);
     vadStateRef.current = newState;
     setVadState(newState);
   };
 
-  function stopMedia() {
+  function stopMicAndSTT() {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -90,13 +86,15 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       mediaRecorderRef.current.stop();
     }
     if (microhponeStreamRef.current) {
+      if (microhponeStreamRef.current.speechEvents) {
+        microhponeStreamRef.current.speechEvents.stop();
+      }
       microhponeStreamRef.current.getTracks().forEach(t => t.stop());
       microhponeStreamRef.current = null;
     }
-    if (dgConnectionRef.current) {
-      dgConnectionRef.current.close();
-      dgConnectionRef.current = null;
-    }
+  }
+
+  function stopAudioPlayback() {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -105,13 +103,20 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     isPlayingRef.current = false;
   }
 
+  function stopMedia() {
+    stopMicAndSTT();
+    stopAudioPlayback();
+  }
+
   // --- Backend WebSocket (Groq + Cartesia) ---
   const connectBackendWebSocket = () => {
     const wsUrl = API_BASE_URL.replace('http', 'ws') + '/chat_stream';
+    console.log("[BACKEND WS] Attempting to connect to:", wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      console.log("[BACKEND WS] Connected!");
       // Send a keep‑alive ping every 30 seconds to avoid idle timeouts
       ws.pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -175,6 +180,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
         return;
       }
       if (data.audio) {
+        console.log("[BACKEND WS] Audio received. Size:", data.audio.length);
         audioQueueRef.current.push(data.audio);
         if (!isPlayingRef.current) {
           playNextAudio();
@@ -182,6 +188,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
       }
       if (data.type === 'text' || data.text) {
         const aiText = data.text;
+        console.log("[BACKEND WS] Text received:", aiText);
         if (!aiText) return;
         setConversation(prev => {
           const lastMsg = prev[prev.length - 1];
@@ -193,9 +200,11 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
         });
       }
       if (data.type === 'done') {
+        console.log("[BACKEND WS] DONE signal received. Audio queue length:", audioQueueRef.current.length, "isPlaying:", isPlayingRef.current);
         if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
           // No audio was received (Google Translate TTS may have failed).
           // Skip audio gracefully and proceed to the next turn.
+          console.log("[BACKEND WS] No audio in queue, calling handleTurnEnd");
           handleTurnEnd();
         }
       }
@@ -203,7 +212,9 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
   };
 
   const playNextAudio = () => {
+    console.log("[AUDIO] playNextAudio called. Queue length:", audioQueueRef.current.length);
     if (audioQueueRef.current.length === 0) {
+      console.log("[AUDIO] No more audio in queue. Calling handleTurnEnd");
       isPlayingRef.current = false;
       handleTurnEnd();
       return;
@@ -213,156 +224,190 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     
     const audioData = audioQueueRef.current.shift();
     const audioUrl = `data:audio/mp3;base64,${audioData}`;
+    console.log("[AUDIO] Creating audio element from base64. Data length:", audioData.length);
     const audio = new Audio(audioUrl);
     currentAudioRef.current = audio;
 
-    audio.onended = () => playNextAudio();
+    audio.onended = () => {
+      console.log("[AUDIO] Audio ended, playing next");
+      playNextAudio();
+    };
     audio.play().catch(err => {
-      console.error("Audio playback error:", err);
+      console.error("[AUDIO] Playback error:", err);
       playNextAudio();
     });
   };
 
   const handleTurnEnd = () => {
+    console.log("[TURN END] Checking end conditions. userTurnCount:", userTurnCount, "MAX_TURNS:", MAX_TURNS, "isEnding:", isEndingRef.current);
 
     if (userTurnCount >= MAX_TURNS || isEndingRef.current) {
       if (!isEndingRef.current) {
+        console.log("[TURN END] Ending session - max turns reached or session ending");
         setIsEnding(true);
         endSession();
       }
     } else {
-      updateVadState('LISTENING');
+      console.log("[TURN END] Returning to LISTENING state after delay:", LISTENING_DELAY_MS, "ms");
+      setTimeout(() => {
+        if (!isEndingRef.current && vadStateRef.current !== 'ERROR') {
+          startVoiceCapture();
+        }
+      }, LISTENING_DELAY_MS);
     }
   };
 
-  // --- Deepgram STT ---
-  const startDeepgram = async () => {
-    stopMedia();
-    if (!deepgramKeyRef.current) return;
+  // --- Gemini STT Voice Capture (Turn-based MediaRecorder) ---
+  const startVoiceCapture = async () => {
+    console.log("[VOICE] Starting voice capture...");
     
-    // Small delay to let the OS fully release the audio device after stopMedia
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Stop silence timer and old MediaRecorder if any
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
     
-    let stream = null;
+    // Clear old chunks for the new turn
+    audioChunkBufferRef.current = [];
     
-    try {
-      // Try with audio processing constraints first
-      stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
-      });
-    } catch (firstErr) {
-      console.warn("getUserMedia with constraints failed, retrying with basic audio:", firstErr.message);
+    let stream = microhponeStreamRef.current;
+    if (!stream) {
+      // Small delay to let the OS fully release the audio device after stopMicAndSTT
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
       try {
-        // Fallback: request mic with no constraints
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (secondErr) {
-        console.error("Microphone access error:", secondErr);
-        if (secondErr.name === 'NotReadableError') {
-          setSttError("Could not start the microphone. Try closing other apps that might be using it, or check Windows Settings > Privacy > Microphone.");
-        } else if (secondErr.name === 'NotAllowedError') {
-          setSttError("Microphone permission denied. Please allow microphone access in your browser settings to practice.");
-        } else {
-          setSttError("Could not access microphone: " + secondErr.message);
-        }
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+        });
+        microhponeStreamRef.current = stream;
+        
+        console.log("[VOICE] Setting up Hark...");
+        // -50dB is standard and stable threshold
+        const speechEvents = hark(stream, { threshold: -50, interval: 100 });
+        
+        speechEvents.on('speaking', () => {
+          console.log("[HARK] Speaking detected. State:", vadStateRef.current);
+          if (vadStateRef.current === 'LISTENING') {
+            updateVadState('SPEAKING');
+            if (silenceTimerRef.current) {
+              clearTimeout(silenceTimerRef.current);
+              silenceTimerRef.current = null;
+            }
+          }
+        });
+
+        speechEvents.on('stopped_speaking', () => {
+          console.log("[HARK] Stopped speaking. State:", vadStateRef.current);
+          if (vadStateRef.current === 'SPEAKING' || vadStateRef.current === 'LISTENING') {
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = setTimeout(() => {
+              if (vadStateRef.current === 'SPEAKING') {
+                const chunks = audioChunkBufferRef.current.slice();
+                
+                if (chunks.length > 0) {
+                  updateVadState('PROCESSING'); 
+                  
+                  // Stop recorder cleanly
+                  if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                    mediaRecorderRef.current.stop();
+                  }
+                  
+                  const mimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
+                  console.log("[VOICE] Sending audio to Gemini STT. Chunk count:", chunks.length);
+                  const blob = new Blob(chunks, { type: mimeType });
+                  const formData = new FormData();
+                  formData.append('audio', blob, 'speech.webm');
+
+                  fetch(`${API_BASE_URL}/stt`, { method: 'POST', body: formData })
+                    .then(res => res.json())
+                    .then(data => {
+                      console.log("[VOICE] STT Response:", data);
+                      const transcript = data.text?.trim();
+                      if (transcript) {
+                        handleSpeechEnd(transcript);
+                      } else {
+                        console.log("[VOICE] Empty transcript from STT");
+                        if (!isEndingRef.current && vadStateRef.current !== 'AI_SPEAKING') {
+                          startVoiceCapture();
+                        }
+                      }
+                    })
+                    .catch(err => {
+                      console.error("[VOICE] STT Error:", err);
+                      if (!isEndingRef.current && vadStateRef.current !== 'AI_SPEAKING') {
+                        startVoiceCapture();
+                      }
+                    });
+                } else {
+                  console.log("[VOICE] No chunks to send, returning to LISTENING");
+                  updateVadState('LISTENING');
+                }
+              }
+              silenceTimerRef.current = null;
+            }, 800);
+          }
+        });
+
+        microhponeStreamRef.current.speechEvents = speechEvents;
+      } catch (err) {
+        console.error("Microphone access error:", err);
+        setSttError("Could not access microphone.");
         updateVadState('ERROR');
         return;
       }
     }
-    
-    microhponeStreamRef.current = stream;
 
     try {
-      const deepgramToken = deepgramKeyRef.current?.trim();
-      // Added keepalive=true to prevent 10s silence timeout
-      const wsUrl = `wss://api.deepgram.com/v1/listen?model=general&language=en-US&punctuate=true&interim_results=true&endpointing=2000&utterance_end_ms=3000&keepalive=true`;
-      const connection = new WebSocket(wsUrl, ['token', deepgramToken]);
-
-      connection.onerror = (err) => {
-        console.error("Deepgram Error:", err);
-      };
-
-      connection.onclose = () => {
-        if (!isEndingRef.current && vadStateRef.current !== 'ERROR') {
-          console.log("Deepgram connection closed unexpectedly. Reconnecting...");
-          setTimeout(startDeepgram, 1000);
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      
+      mediaRecorder.addEventListener('dataavailable', event => {
+        if (event.data.size > 0) {
+          audioChunkBufferRef.current.push(event.data);
         }
-      };
-
-      dgConnectionRef.current = connection;
-
-      connection.onopen = () => {
-        setSttError(null);
-        if (vadStateRef.current !== 'PROCESSING' && vadStateRef.current !== 'AI_SPEAKING') {
-          updateVadState('LISTENING');
-        }
-        const mediaRecorder = new MediaRecorder(stream);
-        mediaRecorderRef.current = mediaRecorder;
-
-        mediaRecorder.addEventListener('dataavailable', event => {
-          // Only forward audio to Deepgram when we are actively LISTENING.
-          // This prevents the AI's own TTS audio (echo) or ambient noise during
-          // PROCESSING / AI_SPEAKING from being transcribed as user speech.
-          if (
-            event.data.size > 0 &&
-            dgConnectionRef.current?.readyState === WebSocket.OPEN &&
-            vadStateRef.current === 'LISTENING'
-          ) {
-            dgConnectionRef.current.send(event.data);
-          }
-        });
-        mediaRecorder.start(100);
-      };
-
-      connection.onmessage = (event) => {
-        if (vadStateRef.current !== 'LISTENING') {
-          transcriptBufferRef.current = [];
-          return false;
-        }
-
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'Results') {
-          const transcript = data.channel.alternatives[0].transcript;
-          if (data.is_final && transcript) {
-             transcriptBufferRef.current.push(transcript);
-          }
-          if (data.speech_final) {
-             const fullTranscript = transcriptBufferRef.current.join(' ').trim();
-             if (fullTranscript) {
-               handleSpeechEnd(fullTranscript);
-             }
-             transcriptBufferRef.current = [];
-          }
-        } else if (data.type === 'UtteranceEnd') {
-             const fullTranscript = transcriptBufferRef.current.join(' ').trim();
-             if (fullTranscript) {
-               handleSpeechEnd(fullTranscript);
-             }
-             transcriptBufferRef.current = [];
-        }
-        
-        return false;
-      };
-    } catch (wsErr) {
-      console.error("Deepgram WebSocket setup error:", wsErr);
-      setSttError("Failed to connect to speech recognition service.");
+      });
+      mediaRecorder.start(100);
+      console.log("[VOICE] New MediaRecorder started for this turn.");
+      updateVadState('LISTENING');
+    } catch (err) {
+      console.error("[VOICE] MediaRecorder start error:", err);
+      setSttError("Failed to start speech recording.");
       updateVadState('ERROR');
     }
   };
 
   const startConversation = () => {
-    if (isEnding || outcome) return;
+    console.log("[START CONVERSATION] Starting practice session");
+    if (isEnding || outcome) {
+      console.log("[START CONVERSATION] Session already ending or completed");
+      return;
+    }
     // Reset user turn counter at the start of a new session
     setUserTurnCount(0);
     connectBackendWebSocket();
     setIsSessionActive(true);
     updateVadState('SETTING_UP');
-    startDeepgram();
+    startVoiceCapture();
   };
 
   const handleSpeechEnd = (transcript) => {
+    console.log("[SPEECH END] Received transcript:", transcript);
     const trimmedTranscript = transcript.trim();
-    if (!trimmedTranscript || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!trimmedTranscript) {
+      console.log("[SPEECH END] Empty transcript after trim");
+      return;
+    }
+    if (!wsRef.current) {
+      console.error("[SPEECH END] Backend WebSocket not initialized");
+      return;
+    }
+    if (wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error("[SPEECH END] Backend WebSocket not OPEN. State:", wsRef.current.readyState);
+      return;
+    }
 
     // Increment user turn count
     setUserTurnCount(prev => prev + 1);
@@ -372,6 +417,7 @@ function Session({ student, customLesson, onViewDashboard, onSessionComplete }) 
     conversationRef.current = nextConversation;
     setConversation(nextConversation);
 
+    console.log("[SPEECH END] Sending to backend. Turn count:", userTurnCount + 1);
     updateVadState('PROCESSING');
     
     // We intentionally leave the microphone and Deepgram connection OPEN 

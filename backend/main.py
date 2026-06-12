@@ -120,43 +120,85 @@ async def login(req: LoginRequest):
 async def stt(audio: UploadFile = File(...)):
     # Read audio bytes
     audio_bytes = await audio.read()
+    if len(audio_bytes) < 1500:
+        print(f"DEBUG: Audio file too small for transcription: {len(audio_bytes)} bytes")
+        return {"text": ""}
     
     try:
         print(f"DEBUG: Received audio file. Size: {len(audio_bytes)} bytes")
         
-        import google.generativeai as genai
         gemini_key = os.environ.get("GEMINI_API_KEY")
-        genai.configure(api_key=gemini_key)
+        if not gemini_key:
+            print("DEBUG: No GEMINI_API_KEY set in environment")
+            return {"text": ""}
+
+        print(f"DEBUG: Transcribing with Gemini REST API...")
+        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+        mime_type = audio.content_type or "audio/webm"
         
-        # Save bytes to a temp file because genai.upload_file needs a path
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
+        # Using gemini-2.5-flash as it is supported and configured for this project
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": mime_type,
+                                "data": audio_b64
+                            }
+                        },
+                        {
+                            "text": "Transcribe only clear human speech in this audio. The speech may be in English, Amharic, or other languages. Return ONLY the exact words spoken in the language they were spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string."
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0
+            }
+        }
         
+        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+        if response.status_code != 200:
+            print(f"DEBUG: Gemini API returned status {response.status_code}: {response.text}")
+            return {"text": ""}
+            
+        res_json = response.json()
+        transcript = ""
         try:
-            print(f"DEBUG: Transcribing with Gemini 3.1 Flash...")
-            audio_file = genai.upload_file(path=tmp_path, display_name="User Speech")
+            transcript = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as extract_err:
+            print(f"DEBUG: Failed to parse Gemini response: {extract_err}. Response: {res_json}")
             
-            # Using the model we confirmed is available on your account
-            model = genai.GenerativeModel('models/gemini-3.1-flash-lite')
-            response = model.generate_content([
-                audio_file, 
-                "Transcribe this audio exactly. Return ONLY the transcript text, nothing else."
-            ])
-            
-            if response.text:
-                transcript = response.text.strip()
-                print(f"DEBUG: STT Success: {transcript}")
-                return {"text": transcript}
-        finally:
-            # Always cleanup temp file
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            
+        if transcript:
+            no_speech_markers = [
+                "no clear speech",
+                "no speech",
+                "silence",
+                "background noise",
+                "empty string",
+                "inaudible",
+                "unclear",
+                "i'm sorry",
+                "i cannot",
+                "i can't",
+                "there is no",
+                "nothing to transcribe",
+            ]
+            normalized_transcript = transcript.lower().strip(" .!\"'`")
+            if (
+                not normalized_transcript
+                or normalized_transcript in {"", "''", '""', "n/a", "none"}
+                or any(marker in normalized_transcript for marker in no_speech_markers)
+            ):
+                print(f"DEBUG: STT returned no-speech marker: {transcript}")
+                return {"text": ""}
+            print(f"DEBUG: STT Success: {transcript}")
+            return {"text": transcript}
     except Exception as e:
         print(f"DEBUG: STT Error: {e}")
-        
-    return {"text": "I think my English is getting better every day."}
+    return {"text": ""}
 
 class ConversationRequest(BaseModel):
     transcript: str
@@ -260,17 +302,21 @@ async def chat_stream(websocket: WebSocket):
             # 1. Receive JSON payload (history, cefrLevel, lesson, transcript)
             payload = await websocket.receive_json()
             msg_type = payload.get("type")
+            print(f"[CHAT_STREAM] Received message type: {msg_type}")
             
             if msg_type == "ping":
+                print("[CHAT_STREAM] Ping received, continuing...")
                 continue
                 
             is_start = (msg_type == "start")
             transcript = payload.get("transcript")
             
             if not transcript and not is_start:
+                print("[CHAT_STREAM] No transcript and not start, continuing...")
                 continue
                 
             if transcript:
+                print(f"[CHAT_STREAM] User transcript: {transcript}")
                 # Send transcript back so UI can display what user said
                 await websocket.send_json({"type": "transcript", "text": transcript})
             
@@ -310,6 +356,7 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
             
             try:
                 # Use Groq for ultra-fast generation
+                print(f"[CHAT_STREAM] Calling Groq with {len(messages)} messages...")
                 response = groq_client.chat.completions.create(
                     model="llama-3.1-8b-instant",
                     messages=messages,
@@ -317,8 +364,10 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                     max_tokens=150,
                 )
                 full_ai_text = response.choices[0].message.content
+                print(f"[CHAT_STREAM] Groq response: {full_ai_text}")
 
                 # Send text immediately
+                print("[CHAT_STREAM] Sending text to client...")
                 await websocket.send_json({
                     "type": "text",
                     "text": full_ai_text
@@ -326,34 +375,43 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                 
                 # Use Google Translate TTS (free) instead of Cartesia
                 try:
+                    print("[CHAT_STREAM] Starting TTS generation...")
                     from urllib.parse import quote
                     max_chunk_size = 200
                     text_to_speak = full_ai_text
                     chunks = [text_to_speak[i:i + max_chunk_size] for i in range(0, len(text_to_speak), max_chunk_size)]
+                    print(f"[CHAT_STREAM] TTS text split into {len(chunks)} chunks")
                     combined_audio = b""
-                    for chunk in chunks:
+                    for idx, chunk in enumerate(chunks):
                         encoded_chunk = quote(chunk)
                         tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
                         tts_resp = requests.get(tts_url, headers={"User-Agent": "Mozilla/5.0"})
                         if tts_resp.status_code == 200:
                             combined_audio += tts_resp.content
+                            print(f"[CHAT_STREAM] TTS chunk {idx + 1} received. Size: {len(tts_resp.content)} bytes")
+                        else:
+                            print(f"[CHAT_STREAM] TTS chunk {idx + 1} failed. Status: {tts_resp.status_code}")
                     if combined_audio:
                         audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
+                        print(f"[CHAT_STREAM] Sending audio to client. Base64 size: {len(audio_base64)} bytes")
                         await websocket.send_json({"type": "audio", "audio": audio_base64})
+                    else:
+                        print("[CHAT_STREAM] No audio generated from TTS")
                 except Exception as tts_err:
-                    print("Google TTS exception:", tts_err)
+                    print("[CHAT_STREAM] Google TTS exception:", tts_err)
 
 
                 # Signal end of turn
+                print("[CHAT_STREAM] Sending DONE signal")
                 await websocket.send_json({"type": "done", "full_text": full_ai_text.strip()})
             except Exception as generation_err:
-                print(f"Error during Groq generation: {generation_err}")
+                print(f"[CHAT_STREAM] Error during Groq generation: {generation_err}")
                 await websocket.send_json({"type": "done", "full_text": "I'm having a bit of trouble connecting right now."})
                 
     except WebSocketDisconnect:
-        print("WebSocket Client disconnected")
+        print("[CHAT_STREAM] WebSocket Client disconnected")
     except Exception as e:
-        print(f"WebSocket Exception: {e}")
+        print(f"[CHAT_STREAM] WebSocket Exception: {e}")
 
 class SessionSaveRequest(BaseModel):
     studentId: str
