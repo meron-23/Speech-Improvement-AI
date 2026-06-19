@@ -684,7 +684,18 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
                 const isCorrect = item.status === 'correct';
                 const isPartial = item.status === 'partial';
                 const issueText = item.issue || (!isCorrect ? (isPartial ? T.partlyCorrect : T.needsImprovement) : '');
-                const suggestionText = item.suggestion || '';
+                const rawSuggestion = item.suggestion || '';
+
+                // Parse the 'Try: "actual English sentence"' format the LLM produces.
+                // We re-render it as: "<T.tryPrefix>: <english sentence>" so only the
+                // label word is translated, keeping the model answer in English.
+                let suggestionLabel = T.tryPrefix;   // "Try" / "ሞክር"
+                let suggestionBody  = rawSuggestion;  // full text fallback
+                const tryMatch = rawSuggestion.match(/^[Tt]ry\s*:\s*(.+)$/s);
+                if (tryMatch) {
+                  suggestionBody = tryMatch[1].trim();
+                }
+
                 return (
                   <div className="review-item" key={`${metric.name}-${idx}`}>
                     <div className={`review-status ${isCorrect ? 'correct' : isPartial ? 'partial' : 'missing'}`}>
@@ -697,11 +708,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
                       ) : (
                         <>
                           {issueText && (
-                            <span style={{ display: 'block', fontSize: '0.82rem', color: isPartial ? '#b45309' : '#dc2626', marginBottom: suggestionText ? '6px' : '0' }}>
+                            <span style={{ display: 'block', fontSize: '0.82rem', color: isPartial ? '#b45309' : '#dc2626', marginBottom: rawSuggestion ? '6px' : '0' }}>
                               ⚠ {issueText}
                             </span>
                           )}
-                          {suggestionText && (
+                          {rawSuggestion && (
                             <div style={{
                               marginTop: '6px',
                               padding: '8px 12px',
@@ -710,9 +721,9 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
                               border: '1px solid #86efac',
                               fontSize: '0.85rem',
                               color: '#166534',
-                              fontStyle: 'italic',
                             }}>
-                              💡 {suggestionText}
+                              💡 <span style={{ fontWeight: 600 }}>{suggestionLabel}:</span>{' '}
+                              <span style={{ fontStyle: 'italic' }}>{suggestionBody}</span>
                             </div>
                           )}
                         </>

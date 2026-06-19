@@ -135,7 +135,7 @@ async def stt(audio: UploadFile = File(...)):
         genai.configure(api_key=gemini_key)
         
         print(f"DEBUG: Transcribing with Gemini...")
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.1-flash-lite')
         response = model.generate_content([
             {"mime_type": audio.content_type or "audio/webm", "data": audio_bytes}, 
             "Transcribe only clear human speech in this audio. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string."
