@@ -309,14 +309,28 @@ Stay in character and help the student achieve their objective through conversat
             if is_start:
                 system_prompt += "\n\nThis is the very beginning of the conversation. Start the roleplay by greeting the student naturally according to the context and your role. Keep it short and engaging!"
 
-            system_prompt += f"""
-ADAPTIVE STYLE:
-- If Student is A1/A2: Use very simple grammar, high-frequency vocabulary, and short sentences. Avoid idioms or complex metaphors.
-- If Student is B1/B2: Use natural conversational English, including common idioms and slightly more complex sentence structures. Challenge the student to express more detailed ideas.
+            # Level-specific response rules
+            if cefrLevel in ("A1", "A2"):
+                length_rule = (
+                    "RESPONSE LENGTH (STRICT): You are speaking with a BEGINNER. "
+                    "Respond in 1–2 very short, simple sentences MAXIMUM. "
+                    "Use only basic, everyday vocabulary. Never write a paragraph."
+                )
+            elif cefrLevel in ("B1", "B2"):
+                length_rule = (
+                    "RESPONSE LENGTH: Keep responses to 2–3 sentences. "
+                    "Use natural conversational English with common vocabulary."
+                )
+            else:
+                length_rule = "RESPONSE LENGTH: Keep responses concise, 2–3 sentences at most."
 
-Keep your responses natural and appropriate for a {cefrLevel} level student.
-Ask follow-up questions to keep the conversation moving.
-Do NOT correct the student's grammar during the conversation; keep the flow going.
+            system_prompt += f"""
+{length_rule}
+
+ABSOLUTE RULES (never break these):
+- NEVER include stage directions, gestures, or actions such as *smiles*, *nods*, *laughs*, *sighs*, or any text wrapped in asterisks (*...*). Speak only in plain words.
+- Do NOT correct the student's grammar during the conversation; keep the flow going.
+- Ask one short follow-up question to keep the conversation moving.
 
 STRICT RULE: If the user's input is NOT in English (e.g., they speak in another language), do not answer their question or continue the topic. Instead, politely nudge them to try speaking in English. For example: "I'm sorry, I didn't quite understand. Could you try saying that in English?"
 """
@@ -334,9 +348,16 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                     model="llama-3.1-8b-instant",
                     messages=messages,
                     temperature=0.7,
-                    max_tokens=150,
+                    max_tokens=120,
                 )
-                full_ai_text = response.choices[0].message.content
+                raw_ai_text = response.choices[0].message.content
+
+                # Strip any stage directions / gesture text wrapped in asterisks
+                import re as _re
+                full_ai_text = _re.sub(r'\*[^*]+\*', '', raw_ai_text).strip()
+                # Collapse multiple spaces left by removal
+                full_ai_text = _re.sub(r'  +', ' ', full_ai_text).strip()
+
                 print(f"[CHAT_STREAM] Groq response: {full_ai_text}")
 
                 # Send text immediately
@@ -526,29 +547,29 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
 
     # 2. Update Student Progress if passed
     if passed:
-        # Find next lesson in the same CEFR level with the next highest order
+        # Find next lesson in the same CEFR level with the next highest order.
+        # Fetch all lessons for the level with a simple single-field query (no composite
+        # index needed), then sort and filter in Python.
         current_lesson_doc = db.collection("curriculum").document(req.lessonId).get()
         if current_lesson_doc.exists:
             current_data = current_lesson_doc.to_dict()
             current_order = current_data.get("order", 1)
             current_cefr = current_data.get("cefrLevel", req.cefrLevel)
 
-            # Query for next lesson: same CEFR level, order strictly greater than current
-            next_lessons_query = (
-                db.collection("curriculum")
-                .where("cefrLevel", "==", current_cefr)
-                .where("order", ">", current_order)
-                .order_by("order")
-                .limit(1)
-                .stream()
-            )
+            # Single-field query — no composite index required
+            all_level_lessons = db.collection("curriculum").where("cefrLevel", "==", current_cefr).stream()
+            candidates = []
+            for doc in all_level_lessons:
+                d = doc.to_dict()
+                if d.get("order", 0) > current_order:
+                    candidates.append(d)
 
-            for doc in next_lessons_query:
-                next_lesson = doc.to_dict()
+            if candidates:
+                candidates.sort(key=lambda x: x.get("order", 0))
+                next_lesson = candidates[0]
                 db.collection("students").document(req.studentId).update({
                     "currentLessonId": next_lesson["lessonId"]
                 })
-                break  # only take the first result
 
         # Determine if the level is complete (no next lesson found)
         if not next_lesson:
