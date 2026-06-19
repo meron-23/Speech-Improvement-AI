@@ -4,7 +4,6 @@ import Dashboard from './Dashboard';
 import Session from './Session';
 import History from './History';
 import Progress from './Progress.jsx';
-
 import Settings from './Settings';
 import Layout from './Layout';
 import API_BASE_URL from './config';
@@ -14,6 +13,7 @@ function App() {
   const [student, setStudent] = useState(null);
   const [showTestPrompt, setShowTestPrompt] = useState(false);
   const [selectedLesson, setSelectedLesson] = useState(null);
+  const [amharic, setAmharic] = useState(true); // default Amharic UI
 
   // --- Shared cached data (fetched once, passed as props) ---
   const [sharedSessions, setSharedSessions] = useState([]);
@@ -43,16 +43,42 @@ function App() {
     }
   }, []);
 
+  // Re-fetch both the student profile from Firestore AND session/lesson data.
+  // Called whenever the user navigates back to the Dashboard so the unlocked
+  // lessons always reflect the most up-to-date Firestore state.
+  const refreshStudentAndData = useCallback(async (currentStudent) => {
+    const s = currentStudent;
+    if (!s) return;
+    // Kick off shared data refresh immediately (uses cached studentId/level)
+    fetchSharedData(s);
+    // Simultaneously sync the student profile from Firestore
+    try {
+      const res = await fetch(`${API_BASE_URL}/student/${s.studentId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.student) {
+        const fresh = data.student;
+        setStudent(fresh);
+        localStorage.setItem('speech_ai_student', JSON.stringify(fresh));
+        if (fresh.levelComplete) setShowTestPrompt(true);
+        // Refresh shared data again with potentially updated CEFR level
+        fetchSharedData(fresh);
+      }
+    } catch (err) {
+      console.error('Error syncing student profile on dashboard return:', err);
+    }
+  }, [fetchSharedData]);
+
   useEffect(() => {
     const savedStudent = localStorage.getItem('speech_ai_student');
     if (savedStudent) {
       const parsed = JSON.parse(savedStudent);
       setStudent(parsed);
-      
+
       // Restore saved view or default to DASHBOARD
       const savedView = localStorage.getItem('speech_ai_view');
       setCurrentView(savedView || 'DASHBOARD');
-      
+
       if (parsed.levelComplete) setShowTestPrompt(true);
 
       // Fetch shared data (sessions + lessons) once on load
@@ -113,20 +139,23 @@ function App() {
   return (
     <div className="app-container">
       {currentView === 'LOGIN' ? (
-        <Login onLogin={handleLoginSuccess} />
+        <Login onLogin={handleLoginSuccess} amharic={amharic} setAmharic={setAmharic} />
       ) : (
-        <Layout 
-          student={student} 
-          currentView={currentView} 
-          setCurrentView={setCurrentView} 
+        <Layout
+          student={student}
+          currentView={currentView}
+          setCurrentView={setCurrentView}
           onLogout={handleLogout}
+          amharic={amharic}
+          setAmharic={setAmharic}
         >
           {currentView === 'DASHBOARD' && (
-            <Dashboard 
+            <Dashboard
               student={student}
               sessions={sharedSessions}
               lessons={sharedLessons}
               dataLoading={dataLoading}
+              amharic={amharic}
               onNewSession={(lesson) => {
                 setSelectedLesson(lesson || null);
                 setCurrentView('SESSION');
@@ -134,14 +163,17 @@ function App() {
               onViewHistory={() => setCurrentView('HISTORY')}
             />
           )}
-          
+
           {currentView === 'SESSION' && (
-            <Session 
-              student={student} 
+            <Session
+              student={student}
               customLesson={selectedLesson}
+              amharic={amharic}
               onViewDashboard={() => {
                 setSelectedLesson(null);
                 setCurrentView('DASHBOARD');
+                // Re-sync student & sessions so the next lesson appears unlocked
+                refreshStudentAndData(student);
               }}
               onSessionComplete={(updatedStudent) => {
                 setStudent(updatedStudent);
@@ -155,20 +187,23 @@ function App() {
           )}
 
           {currentView === 'HISTORY' && (
-            <History 
-              student={student}
-              sessions={sharedSessions}
-              dataLoading={dataLoading}
-              onBack={() => setCurrentView('DASHBOARD')} 
-            />
-          )}
-
-          {currentView === 'PROGRESS' && (
-            <Progress 
+            <History
               student={student}
               sessions={sharedSessions}
               lessons={sharedLessons}
               dataLoading={dataLoading}
+              amharic={amharic}
+              onBack={() => setCurrentView('DASHBOARD')}
+            />
+          )}
+
+          {currentView === 'PROGRESS' && (
+            <Progress
+              student={student}
+              sessions={sharedSessions}
+              lessons={sharedLessons}
+              dataLoading={dataLoading}
+              amharic={amharic}
               onStartLesson={(lesson) => {
                 setSelectedLesson(lesson || null);
                 setCurrentView('SESSION');
@@ -177,9 +212,8 @@ function App() {
           )}
 
 
-
           {currentView === 'SETTINGS' && (
-            <Settings 
+            <Settings
               student={student}
               onUpdateStudent={handleUpdateStudent}
             />
@@ -187,50 +221,50 @@ function App() {
         </Layout>
       )}
       {showTestPrompt && (
-        <div style={{ 
-          position: 'fixed', 
-          top: 0, 
-          left: 0, 
-          right: 0, 
-          bottom: 0, 
-          backgroundColor: 'rgba(26, 15, 28, 0.7)', 
-          backdropFilter: 'blur(12px) saturate(180%)', 
-          zIndex: 9999, 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center', 
-          padding: '1.5rem' 
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(26, 15, 28, 0.7)',
+          backdropFilter: 'blur(12px) saturate(180%)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1.5rem'
         }}>
-          <div style={{ 
-            maxWidth: '500px', 
-            width: '100%', 
-            backgroundColor: '#ffffff', 
-            borderRadius: '24px', 
-            padding: '3rem 2.5rem', 
-            textAlign: 'center', 
-            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4)', 
+          <div style={{
+            maxWidth: '500px',
+            width: '100%',
+            backgroundColor: '#ffffff',
+            borderRadius: '24px',
+            padding: '3rem 2.5rem',
+            textAlign: 'center',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4)',
             border: '1px solid rgba(158, 40, 145, 0.1)',
             animation: 'popIn 0.3s ease-out'
           }}>
-            <div style={{ 
-              width: '80px', 
-              height: '80px', 
-              borderRadius: '50%', 
-              margin: '0 auto 1.5rem', 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              fontSize: '2.5rem', 
-              backgroundColor: 'rgba(158, 40, 145, 0.1)', 
+            <div style={{
+              width: '80px',
+              height: '80px',
+              borderRadius: '50%',
+              margin: '0 auto 1.5rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '2.5rem',
+              backgroundColor: 'rgba(158, 40, 145, 0.1)',
               color: '#9E2891',
               boxShadow: '0 8px 16px rgba(158, 40, 145, 0.1)'
             }}>
               🏆
             </div>
-            <h2 style={{ 
-              fontSize: '2rem', 
-              fontWeight: '800', 
-              marginBottom: '1rem', 
+            <h2 style={{
+              fontSize: '2rem',
+              fontWeight: '800',
+              marginBottom: '1rem',
               background: 'linear-gradient(135deg, #9E2891 0%, #e5a935 100%)',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
@@ -238,29 +272,29 @@ function App() {
             }}>
               Level Complete!
             </h2>
-            <p style={{ 
-              color: '#5b4e5d', 
-              marginBottom: '2rem', 
+            <p style={{
+              color: '#5b4e5d',
+              marginBottom: '2rem',
               lineHeight: '1.6',
               fontSize: '1rem'
             }}>
-              Outstanding job! You have successfully mastered all lessons for this proficiency level. 
+              Outstanding job! You have successfully mastered all lessons for this proficiency level.
               To unlock your next level and curriculum, please complete the external CEFR assessment.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <a 
-                href="https://example.com/cefR-test" 
-                target="_blank" 
-                rel="noopener noreferrer" 
-                style={{ 
-                  display: 'block', 
-                  width: '100%', 
-                  padding: '14px', 
-                  backgroundColor: '#9E2891', 
-                  color: '#ffffff', 
-                  borderRadius: '12px', 
-                  fontWeight: '700', 
-                  textDecoration: 'none', 
+              <a
+                href="https://example.com/cefR-test"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '14px',
+                  backgroundColor: '#9E2891',
+                  color: '#ffffff',
+                  borderRadius: '12px',
+                  fontWeight: '700',
+                  textDecoration: 'none',
                   transition: 'all 0.2s',
                   boxShadow: '0 4px 12px rgba(158, 40, 145, 0.3)',
                   boxSizing: 'border-box'
@@ -270,16 +304,16 @@ function App() {
               >
                 Take the CEFR Test 🌟
               </a>
-              <button 
-                onClick={() => setShowTestPrompt(false)} 
-                style={{ 
-                  width: '100%', 
-                  padding: '12px', 
-                  background: 'transparent', 
-                  border: '1px solid #cbd5e1', 
-                  borderRadius: '12px', 
-                  color: '#665b68', 
-                  fontWeight: '600', 
+              <button
+                onClick={() => setShowTestPrompt(false)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  background: 'transparent',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '12px',
+                  color: '#665b68',
+                  fontWeight: '600',
                   cursor: 'pointer',
                   fontSize: '0.95rem',
                   transition: 'all 0.2s'

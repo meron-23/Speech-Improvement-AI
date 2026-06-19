@@ -2,11 +2,14 @@ import React, { useState } from 'react';
 import { auth } from './firebase';
 import { signInWithCustomToken } from 'firebase/auth';
 import API_BASE_URL from './config';
+import { AM, EN } from './Layout';
 
-function Login({ onLogin }) {
+function Login({ onLogin, amharic, setAmharic }) {
   const [studentId, setStudentId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const T = amharic ? AM : EN;
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -26,10 +29,6 @@ function Login({ onLogin }) {
         throw new Error(data.detail || 'Login failed');
       }
 
-      // Sign in with Firebase (optional depending on if frontend queries DB directly, 
-      // but good practice as required by prompt)
-      // await signInWithCustomToken(auth, data.token);
-      
       onLogin({
         ...data.student,
         token: data.token
@@ -43,30 +42,53 @@ function Login({ onLogin }) {
   };
 
   return (
-    <div className="login-page">
+    <div className="login-page" style={{ position: 'relative' }}>
+      {/* Language toggle button — floating absolute top right */}
+      <div style={{ position: 'absolute', top: '2.5rem', right: '4rem', zIndex: 100 }}>
+        <button
+          onClick={() => setAmharic(!amharic)}
+          title={amharic ? 'Switch to English' : 'ወደ አማርኛ ቀይር'}
+          style={{
+            background: amharic ? '#9E2891' : '#ffffff',
+            color:      amharic ? '#ffffff' : '#64748b',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '6px 12px',
+            fontSize: '0.85rem',
+            fontWeight: '700',
+            cursor: 'pointer',
+            letterSpacing: '0.05em',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+            transition: 'all 0.2s',
+          }}
+        >
+          {amharic ? AM.languageAm : EN.language}
+        </button>
+      </div>
+
       <div className="login-card-container">
         <div className="login-info-section">
-          <h1>Master Your English Speaking</h1>
-          <p>Practice with our AI-powered partner and get instant feedback on your fluency and grammar.</p>
+          <h1>{T.loginMasterTitle}</h1>
+          <p>{T.loginMasterDesc}</p>
           
           <ul className="features-list">
-            <li>Interactive AI Conversations</li>
-            <li>Real-time Speech Transcription</li>
-            <li>CEFR-based Level Tracking</li>
-            <li>Detailed Performance Feedback</li>
+            <li>{T.loginFeat1}</li>
+            <li>{T.loginFeat2}</li>
+            <li>{T.loginFeat3}</li>
+            <li>{T.loginFeat4}</li>
           </ul>
         </div>
 
         <div className="login-form-section">
-          <h2>Welcome Back</h2>
-          <p>Please enter your Student ID to continue</p>
+          <h2>{T.loginWelcome}</h2>
+          <p>{T.loginWelcomeDesc}</p>
           
           <form onSubmit={handleLogin}>
             <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.5rem', color: 'var(--text-main)' }}>Student ID</label>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.5rem', color: 'var(--text-main)' }}>{T.studentIdLabel}</label>
               <input 
                 type="text" 
-                placeholder="e.g. student001" 
+                placeholder={T.studentIdPlaceholder} 
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
                 style={{ marginBottom: '0.5rem' }}
@@ -91,12 +113,12 @@ function Login({ onLogin }) {
             </div>
             
             <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', borderRadius: '12px' }}>
-              {loading ? 'Authenticating...' : 'Sign In'}
+              {loading ? T.authenticating : T.signInBtn}
             </button>
           </form>
 
           <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Need help? Contact your administrator.
+            {T.loginNeedHelp}
           </div>
         </div>
       </div>

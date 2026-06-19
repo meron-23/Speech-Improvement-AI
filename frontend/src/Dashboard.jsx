@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Flame, CheckCircle2, Lock, PlayCircle } from 'lucide-react';
+import { AM, EN } from './Layout';
 
-function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onViewHistory }) {
+function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onViewHistory, amharic }) {
   const [modules, setModules] = useState([]);
   const [activeModuleId, setActiveModuleId] = useState(null);
   const [passedLessonIds, setPassedLessonIds] = useState(new Set());
   const [levelProgress, setLevelProgress] = useState(0);
   const [totalSessionsCount, setTotalSessionsCount] = useState(0);
+
+  const T = amharic ? AM : EN;
 
   // Derive everything from the props whenever sessions or lessons change
   useEffect(() => {
@@ -75,8 +78,22 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
     return '🎯';
   };
 
-  const hour = new Date().getHours();
-  const greetingTime = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+  const getGreeting = () => {
+    const firstName = student.name.split(' ')[0];
+    const hour = new Date().getHours();
+    let timeKey = 'goodMorning';
+    if (hour >= 12 && hour < 18) {
+      timeKey = 'goodAfternoon';
+    } else if (hour >= 18) {
+      timeKey = 'goodEvening';
+    }
+    
+    if (amharic) {
+      return `${T[timeKey]}፣ ${firstName}! 👋`;
+    } else {
+      return `${T[timeKey]}, ${firstName}! 👋`;
+    }
+  };
 
   const activeModule = modules.find(m => m.id === activeModuleId);
 
@@ -84,8 +101,8 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
     <div style={{ width: '100%', paddingBottom: '40px' }}>
       {/* Greeting Section */}
       <div className="dashboard-greeting">
-        <h2>Good {greetingTime}, {student.name.split(' ')[0]}! 👋</h2>
-        <p>Let's continue your journey in English.</p>
+        <h2>{getGreeting()}</h2>
+        <p>{T.continueJourney}</p>
       </div>
 
       {/* Stats Row */}
@@ -96,7 +113,7 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
           </div>
           <div className="stat-info">
             <span className="stat-value">{student.practiceStreak || 0}</span>
-            <span className="stat-label">Day Streak</span>
+            <span className="stat-label">{T.dayStreak}</span>
           </div>
         </div>
 
@@ -106,7 +123,7 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
           </div>
           <div className="stat-info">
             <span className="stat-value">{totalSessionsCount}</span>
-            <span className="stat-label">Sessions Completed</span>
+            <span className="stat-label">{T.sessionsCompleted}</span>
           </div>
         </div>
 
@@ -115,11 +132,11 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
             {student.cefrLevel}
           </div>
           <div className="cefr-progress-info">
-            <span className="progress-label">{levelProgress}% to {getNextCefrLevel(student.cefrLevel)}</span>
+            <span className="progress-label">{levelProgress}% {T.to} {getNextCefrLevel(student.cefrLevel)}</span>
             <div className="progress-bar-bg">
               <div className="progress-bar-fill" style={{ width: `${levelProgress}%` }}></div>
             </div>
-            <span className="progress-subtext">CEFR Progress</span>
+            <span className="progress-subtext">{T.cefrProgress}</span>
           </div>
         </div>
       </div>
@@ -128,12 +145,12 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
       {student.currentLesson && (
         <div className="current-mission-banner" onClick={onNewSession}>
           <div className="mission-banner-info">
-            <span className="mission-banner-label">Active Mission</span>
+            <span className="mission-banner-label">{T.activeMission}</span>
             <h3>{student.currentLesson.title}</h3>
             <p>{student.currentLesson.objective}</p>
           </div>
           <button className="mission-banner-btn">
-            Start Now <PlayCircle size={18} />
+            {T.startNow} <PlayCircle size={18} />
           </button>
         </div>
       )}
@@ -141,11 +158,11 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
       {/* Learning Roadmap with Tabs */}
       <div className="roadmap-container">
         <div className="roadmap-header">
-            <h3 className="roadmap-title">Learning Pathway - {student.cefrLevel}</h3>
+            <h3 className="roadmap-title">{T.learningPathway} - {student.cefrLevel}</h3>
         </div>
         
         {dataLoading ? (
-          <div className="roadmap-loading">Loading roadmap...</div>
+          <div className="roadmap-loading">{T.loadingRoadmap}</div>
         ) : (
           <>
             <div className="module-tabs-container">
@@ -193,15 +210,15 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
                             <div className="task-details">
                               <h5>{task.title}</h5>
                               <span className="task-meta">
-                                {task.targetVocabulary?.length || 0} vocabulary words
+                                {task.targetVocabulary?.length || 0} {T.vocabularyWords}
                               </span>
                             </div>
                             
                             {isCurrent && (
-                              <span className="task-badge current">Current</span>
+                              <span className="task-badge current">{T.current}</span>
                             )}
                             {isPassed && (
-                              <span className="task-badge review">Passed</span>
+                              <span className="task-badge review">{T.passedBadge}</span>
                             )}
                           </div>
                         </div>

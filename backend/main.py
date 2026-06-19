@@ -127,51 +127,22 @@ async def stt(audio: UploadFile = File(...)):
     try:
         print(f"DEBUG: Received audio file. Size: {len(audio_bytes)} bytes")
         
+        import google.generativeai as genai
         gemini_key = os.environ.get("GEMINI_API_KEY")
         if not gemini_key:
-            print("DEBUG: No GEMINI_API_KEY set in environment")
             return {"text": ""}
 
-        print(f"DEBUG: Transcribing with Gemini REST API...")
-        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-        mime_type = audio.content_type or "audio/webm"
+        genai.configure(api_key=gemini_key)
         
-        # Using gemini-2.5-flash as it is supported and configured for this project
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "inlineData": {
-                                "mimeType": mime_type,
-                                "data": audio_b64
-                            }
-                        },
-                        {
-                            "text": "Transcribe only clear human speech in this audio. The speech may be in English, Amharic, or other languages. Return ONLY the exact words spoken in the language they were spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string."
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0
-            }
-        }
+        print(f"DEBUG: Transcribing with Gemini...")
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = model.generate_content([
+            {"mime_type": audio.content_type or "audio/webm", "data": audio_bytes}, 
+            "Transcribe only clear human speech in this audio. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string."
+        ], generation_config={"temperature": 0})
         
-        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-        if response.status_code != 200:
-            print(f"DEBUG: Gemini API returned status {response.status_code}: {response.text}")
-            return {"text": ""}
-            
-        res_json = response.json()
-        transcript = ""
-        try:
-            transcript = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as extract_err:
-            print(f"DEBUG: Failed to parse Gemini response: {extract_err}. Response: {res_json}")
-            
-        if transcript:
+        if response.text:
+            transcript = response.text.strip()
             no_speech_markers = [
                 "no clear speech",
                 "no speech",
@@ -196,8 +167,10 @@ async def stt(audio: UploadFile = File(...)):
                 return {"text": ""}
             print(f"DEBUG: STT Success: {transcript}")
             return {"text": transcript}
+            
     except Exception as e:
         print(f"DEBUG: STT Error: {e}")
+        
     return {"text": ""}
 
 class ConversationRequest(BaseModel):
@@ -420,6 +393,7 @@ class SessionSaveRequest(BaseModel):
     conversation: list
     feedback: object
     lessonId: str = None
+    metricScores: list = None
 
 def _matches_objective(conversation: list, objective: str) -> bool:
     if not objective:
@@ -503,36 +477,87 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                 if user_turns >= 4 and _matches_objective(req.conversation, objective):
                     passed = True
 
+    # Compute overall score and enforce 60% threshold
+    grammar_percent = None
+    accuracy_percent = None
+    
+    # Try getting metrics from metricScores
+    metric_scores = getattr(req, "metricScores", None)
+    if metric_scores:
+        for m in metric_scores:
+            if isinstance(m, dict):
+                name = m.get("name")
+                percent = m.get("percent")
+                if name == "Grammar":
+                    grammar_percent = percent
+                elif name == "Accuracy":
+                    accuracy_percent = percent
+                    
+    # Try parsing metrics from feedback if not found
+    if grammar_percent is None or accuracy_percent is None:
+        try:
+            fb = req.feedback
+            if isinstance(fb, str):
+                fb = json.loads(fb)
+            if isinstance(fb, dict) and "metrics" in fb:
+                for m in fb["metrics"]:
+                    if isinstance(m, dict):
+                        name = m.get("name")
+                        percent = m.get("percent")
+                        if name == "Grammar":
+                            grammar_percent = percent
+                        elif name == "Accuracy":
+                            accuracy_percent = percent
+        except Exception as e:
+            print(f"Error parsing feedback for metrics: {e}")
+            
+    # Compute overall score (mean of grammar and accuracy)
+    if grammar_percent is not None and accuracy_percent is not None:
+        overall_score = (grammar_percent + accuracy_percent) / 2.0
+    elif grammar_percent is not None:
+        overall_score = grammar_percent
+    elif accuracy_percent is not None:
+        overall_score = accuracy_percent
+    else:
+        overall_score = 0.0
+
+    if overall_score < 60:
+        passed = False
+
     # 2. Update Student Progress if passed
     if passed:
-        # Find next lesson in order
+        # Find next lesson in the same CEFR level with the next highest order
         current_lesson_doc = db.collection("curriculum").document(req.lessonId).get()
         if current_lesson_doc.exists:
-            current_order = current_lesson_doc.to_dict().get("order", 1)
-            
-            next_lessons = db.collection("curriculum").where("order", "==", current_order + 1).limit(1).stream()
-            
-            for doc in next_lessons:
+            current_data = current_lesson_doc.to_dict()
+            current_order = current_data.get("order", 1)
+            current_cefr = current_data.get("cefrLevel", req.cefrLevel)
+
+            # Query for next lesson: same CEFR level, order strictly greater than current
+            next_lessons_query = (
+                db.collection("curriculum")
+                .where("cefrLevel", "==", current_cefr)
+                .where("order", ">", current_order)
+                .order_by("order")
+                .limit(1)
+                .stream()
+            )
+
+            for doc in next_lessons_query:
                 next_lesson = doc.to_dict()
                 db.collection("students").document(req.studentId).update({
                     "currentLessonId": next_lesson["lessonId"]
                 })
-            
-            if not next_lesson:
-                level_complete = True
+                break  # only take the first result
 
-        # Determine if the level is complete
+        # Determine if the level is complete (no next lesson found)
         if not next_lesson:
             level_complete = True
-        else:
-            next_level = next_lesson.get("cefrLevel")
-            if next_level and next_level != req.cefrLevel:
-                level_complete = True
-                next_lesson = None
 
     # 3. Save the session
     session_data = req.model_dump()
     session_data["passed"] = passed
+    session_data["overallScore"] = overall_score
     doc_ref = db.collection("sessions").document()
     doc_ref.set(session_data)
     
@@ -580,9 +605,12 @@ def _build_fallback_feedback(conversation: list):
             "review": review,
             "quickTip": "Use full basic patterns: subject + verb + object." if name == "Grammar" else "Answer the question directly and include the key details."
         })
+    percents = [percent, percent]
+    overall_score = round(sum(percents) / len(percents)) if percents else 0
     return {
         "summary": "Here is your speaking profile from the 4-minute assessment.",
-        "metrics": metrics
+        "metrics": metrics,
+        "overallScore": overall_score
     }
 
 def _normalize_feedback_report(raw_report: dict, conversation: list):
@@ -630,9 +658,12 @@ def _normalize_feedback_report(raw_report: dict, conversation: list):
             "quickTip": raw_report.get("quickTips", {}).get(metric_name, "Use full basic patterns: subject + verb + object." if metric_name == "Grammar" else "Answer the question directly and include the key details.") if isinstance(raw_report, dict) else ("Use full basic patterns: subject + verb + object." if metric_name == "Grammar" else "Answer the question directly and include the key details.")
         })
 
+    percents = [m["percent"] for m in normalized_metrics if m["name"] in ["Grammar", "Accuracy"]]
+    overall_score = round(sum(percents) / len(percents)) if percents else 0
     return {
         "summary": raw_report.get("summary", "Here is your speaking profile from the 4-minute assessment.") if isinstance(raw_report, dict) else "Here is your speaking profile from the 4-minute assessment.",
-        "metrics": normalized_metrics
+        "metrics": normalized_metrics,
+        "overallScore": overall_score
     }
 
 @app.post("/feedback")
@@ -678,12 +709,20 @@ Scoring rules:
 - Accuracy score 0 only when the answer is unrelated, empty, or impossible to connect to the conversation.
 - Do not mark an answer wrong just because it is informal, brief, or not the best possible response.
 
+CRITICAL feedback rules for "issue" and "suggestion" fields:
+- When score = 1: set "issue" to "" and "suggestion" to "".
+- When score = 0.5 or 0: you MUST fill BOTH fields.
+  - "issue": a SHORT specific description of what was wrong (e.g. "Missing verb", "Wrong tense used", "Did not answer the question").
+  - "suggestion": a FULL example of how the student SHOULD have said it (e.g. 'Try: "I would like to order a coffee, please."').
+  - The suggestion must always include a model sentence starting with 'Try: "..."'.
+  - Never leave issue or suggestion empty when the score is less than 1.
+
 JSON shape:
 {{
   "summary": "short friendly summary",
   "metrics": {{
     "Grammar": [{{"answer": "student answer", "score": 1, "issue": "", "suggestion": ""}}],
-    "Accuracy": [{{"answer": "student answer", "score": 0.5, "issue": "", "suggestion": ""}}]
+    "Accuracy": [{{"answer": "student answer", "score": 0.5, "issue": "Did not answer the question", "suggestion": "Try: \\"I went to the market yesterday.\\""}}]
   }},
   "quickTips": {{
     "Grammar": "one short tip",
