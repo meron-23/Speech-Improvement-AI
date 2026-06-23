@@ -1,11 +1,12 @@
 import React from 'react';
-import { FileText, BarChart2, LogOut, Mic } from 'lucide-react';
+import { FileText, BarChart2, LogOut, Mic, BookOpen } from 'lucide-react';
 
 // Amharic translation map for all UI navigation / experience strings
 export const AM = {
   practice:          'ልምምድ',
   sessions:          'ክፍለ ጊዜዎች',
   progress:          'እድገት',
+  vocabulary:        'ቃላት',
   logout:            'ውጣ',
   startNow:          'አሁን ጀምር',
   yourTurn:          'ተራህ ነው — አሁን ተናገር',
@@ -107,6 +108,7 @@ export const EN = {
   practice:          'Practice',
   sessions:          'Sessions',
   progress:          'Progress',
+  vocabulary:        'Vocabulary',
   logout:            'Logout',
   startNow:          'Start Now',
   yourTurn:          'Your Turn (Speak Now)',
@@ -211,6 +213,7 @@ function Layout({ student, currentView, setCurrentView, onLogout, amharic, setAm
     { view: 'DASHBOARD', label: T.practice,  Icon: Mic },
     { view: 'HISTORY',   label: T.sessions,  Icon: FileText },
     { view: 'PROGRESS',  label: T.progress,  Icon: BarChart2 },
+    { view: 'VOCABULARY', label: T.vocabulary, Icon: BookOpen },
   ];
 
   return (

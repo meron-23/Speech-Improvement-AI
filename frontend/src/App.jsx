@@ -5,6 +5,7 @@ import Session from './Session';
 import History from './History';
 import Progress from './Progress.jsx';
 import Settings from './Settings';
+import Vocabulary from './Vocabulary';
 import Layout from './Layout';
 import API_BASE_URL from './config';
 
@@ -211,6 +212,16 @@ function App() {
             />
           )}
 
+
+          {currentView === 'VOCABULARY' && (
+            <Vocabulary 
+              student={student}
+              sessions={sharedSessions}
+              lessons={sharedLessons}
+              dataLoading={dataLoading}
+              amharic={amharic}
+            />
+          )}
 
           {currentView === 'SETTINGS' && (
             <Settings
