@@ -19,7 +19,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const [selectedCefr, setSelectedCefr] = useState(null);
   const activeLesson = customLesson || student.currentLesson;
 
-  const MAX_TURNS = 10;
+  const MAX_TURNS = 9999;
   const RESULT_METRICS = ['Grammar', 'Accuracy'];
   const T = amharic ? AM : EN;
   const METRIC_COLORS = {
@@ -292,14 +292,16 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
           audioChunkBufferRef.current.push(event.data);
         }
       };
-      mediaRecorder.start(100);
 
       // Set up Hark VAD silence detection
-      const speechEvents = hark(stream, { threshold: -50, interval: 100 });
-      
+      const speechEvents = hark(stream, { threshold: -40, interval: 100 });
+
       speechEvents.on('speaking', () => {
         if (vadStateRef.current === 'LISTENING') {
           updateVadState('SPEAKING');
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+            mediaRecorderRef.current.start(100);
+          }
         }
         if (silenceTimerRef.current) {
           clearTimeout(silenceTimerRef.current);
@@ -310,7 +312,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
       speechEvents.on('stopped_speaking', () => {
         if (vadStateRef.current === 'SPEAKING' || vadStateRef.current === 'LISTENING') {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          
+
           silenceTimerRef.current = setTimeout(() => {
             if (vadStateRef.current === 'SPEAKING') {
               const chunks = audioChunkBufferRef.current.slice();
@@ -380,7 +382,6 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     connectBackendWebSocket();
     setIsSessionActive(true);
     updateVadState('SETTING_UP');
-    startVoiceCapture();
   };
 
   const handleSpeechEnd = (transcript) => {
@@ -690,7 +691,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
                 // We re-render it as: "<T.tryPrefix>: <english sentence>" so only the
                 // label word is translated, keeping the model answer in English.
                 let suggestionLabel = T.tryPrefix;   // "Try" / "ሞክር"
-                let suggestionBody  = rawSuggestion;  // full text fallback
+                let suggestionBody = rawSuggestion;  // full text fallback
                 const tryMatch = rawSuggestion.match(/^[Tt]ry\s*:\s*(.+)$/s);
                 if (tryMatch) {
                   suggestionBody = tryMatch[1].trim();
@@ -772,7 +773,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const renderIndicator = () => {
     if (!isSessionActive) return null;
     const limitReached = userTurnCountRef.current >= MAX_TURNS || isEndingRef.current;
-    switch(vadState) {
+    switch (vadState) {
       case 'SETTING_UP': return <div className="vad-indicator processing"><Loader2 size={24} className="spin-icon" color="#8b5cf6" /><span>{T.settingUp}</span></div>;
       case 'LISTENING':
         if (limitReached) return <div className="vad-indicator processing"><Loader2 size={24} className="spin-icon" color="#ec4899" /><span>{T.finishing}</span></div>;
@@ -835,7 +836,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: '0.8rem', fontWeight: '700', color: userTurnCount >= MAX_TURNS ? '#ef4444' : 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            {T.turnLimit}: {userTurnCount} / {MAX_TURNS}
+            {T.turnLimit}: {userTurnCount} / {MAX_TURNS === 9999 ? '∞' : MAX_TURNS}
           </div>
           <button onClick={onViewDashboard} style={{ background: '#f1f5f9', color: '#64748b', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '700', cursor: 'pointer', fontSize: '0.9rem' }}>{T.exitSession}</button>
         </div>

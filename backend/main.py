@@ -138,7 +138,7 @@ async def stt(audio: UploadFile = File(...)):
         model = genai.GenerativeModel('gemini-3.1-flash-lite')
         response = model.generate_content([
             {"mime_type": audio.content_type or "audio/webm", "data": audio_bytes}, 
-            "Transcribe only clear human speech in this audio. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string."
+            "Transcribe only clear human speech in this audio. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string. DO NOT converse with me. DO NOT ask for the audio file or a link. Never apologize or explain. If you cannot transcribe it, return an empty string."
         ], generation_config={"temperature": 0})
         
         if response.text:
@@ -156,11 +156,32 @@ async def stt(audio: UploadFile = File(...)):
                 "i can't",
                 "there is no",
                 "nothing to transcribe",
+                "please provide the audio",
+                "link to the audio",
+                "audio file or a link",
+                "would you like me to transcribe",
+                "provide the audio file",
             ]
+            
+            # Common hallucinations when STT processes silence/static
+            exact_match_hallucinations = {
+                "thank you",
+                "thanks for watching",
+                "thank you for watching",
+                "please subscribe",
+                "subscribe to the channel",
+                "okay",
+                "yes",
+                "yeah",
+                "amen",
+                "bye",
+            }
+            
             normalized_transcript = transcript.lower().strip(" .!\"'`")
             if (
                 not normalized_transcript
                 or normalized_transcript in {"", "''", '""', "n/a", "none"}
+                or normalized_transcript in exact_match_hallucinations
                 or any(marker in normalized_transcript for marker in no_speech_markers)
             ):
                 print(f"DEBUG: STT returned no-speech marker: {transcript}")
