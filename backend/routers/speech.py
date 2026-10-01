@@ -1,0 +1,300 @@
+import os
+import re
+import base64
+from urllib.parse import quote
+import requests
+from fastapi import APIRouter, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from pydantic import BaseModel
+import jwt
+from config import JWT_SECRET, GEMINI_API_KEY, GROQ_API_KEY, DEEPGRAM_API_KEY
+from auth_utils import verify_student_token
+
+router = APIRouter(tags=["speech"])
+
+MAX_CHUNK_SIZE = 200
+
+@router.post("/stt")
+async def stt(audio: UploadFile = File(...), current_student: str = Depends(verify_student_token)):
+    audio_bytes = await audio.read()
+    if len(audio_bytes) < 1500:
+        print(f"DEBUG: Audio file too small for transcription: {len(audio_bytes)} bytes")
+        return {"text": ""}
+    
+    try:
+        print(f"DEBUG: Received audio file. Size: {len(audio_bytes)} bytes")
+        import google.generativeai as genai
+        if not GEMINI_API_KEY:
+            return {"text": ""}
+
+        genai.configure(api_key=GEMINI_API_KEY)
+        
+        print("DEBUG: Transcribing with Gemini...")
+        model = genai.GenerativeModel('gemini-3.1-flash-lite')
+        response = model.generate_content([
+            {"mime_type": audio.content_type or "audio/webm", "data": audio_bytes}, 
+            "Transcribe only clear human speech in this audio. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string. DO NOT converse with me. DO NOT ask for the audio file or a link. Never apologize or explain. If you cannot transcribe it, return an empty string."
+        ], generation_config={"temperature": 0})
+        
+        if response.text:
+            transcript = response.text.strip()
+            no_speech_markers = [
+                "no clear speech", "no speech", "silence", "background noise",
+                "empty string", "inaudible", "unclear", "i'm sorry", "i cannot",
+                "i can't", "there is no", "nothing to transcribe", "please provide the audio",
+                "link to the audio", "audio file or a link", "would you like me to transcribe",
+                "provide the audio file"
+            ]
+            
+            exact_match_hallucinations = {
+                "thank you", "thanks for watching", "thank you for watching",
+                "please subscribe", "subscribe to the channel", "okay",
+                "yes", "yeah", "amen", "bye"
+            }
+            
+            normalized_transcript = transcript.lower().strip(" .!\"'`")
+            if (
+                not normalized_transcript
+                or normalized_transcript in {"", "''", '""', "n/a", "none"}
+                or normalized_transcript in exact_match_hallucinations
+                or any(marker in normalized_transcript for marker in no_speech_markers)
+            ):
+                print(f"DEBUG: STT returned no-speech marker: {transcript}")
+                return {"text": ""}
+            print(f"DEBUG: STT Success: {transcript}")
+            return {"text": transcript}
+            
+    except Exception as e:
+        print(f"DEBUG: STT Error: {e}")
+        
+    return {"text": ""}
+
+class ConversationRequest(BaseModel):
+    transcript: str
+    history: list
+    cefrLevel: str
+    lesson: dict = None
+
+@router.post("/conversation")
+async def conversation(req: ConversationRequest, current_student: str = Depends(verify_student_token)):
+    if not GROQ_API_KEY:
+        return {"text": "That is wonderful to hear! Consistent practice is the key to improvement."}
+
+    try:
+        from groq import Groq
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        
+        system_prompt = f"You are a friendly English conversation partner for a {req.cefrLevel} student."
+        if req.lesson:
+            system_prompt = f"""You are playing a role for a lesson: '{req.lesson.get('title')}'.
+Your Role: {req.lesson.get('aiRole')}
+The Context: {req.lesson.get('context')}
+The Student's Objective: {req.lesson.get('objective')}
+Stay in character and help the student achieve their objective through conversation."""
+
+        system_prompt += f"""
+ADAPTIVE STYLE:
+- If Student is A1/A2: Use very simple grammar, high-frequency vocabulary, and short sentences. Avoid idioms or complex metaphors.
+- If Student is B1/B2: Use natural conversational English, including common idioms and slightly more complex sentence structures. Challenge the student to express more detailed ideas.
+
+Keep your responses natural and appropriate for a {req.cefrLevel} level student.
+Ask follow-up questions to keep the conversation moving.
+Do NOT correct the student's grammar during the conversation; keep the flow going.
+
+STRICT RULE: If the user's input is NOT in English (e.g., they speak in another language), do not answer their question or continue the topic. Instead, politely nudge them to try speaking in English. For example: "I'm sorry, I didn't quite understand. Could you try saying that in English?"
+"""
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in req.history:
+            role = "assistant" if msg["role"] == "ai" else "user"
+            messages.append({"role": role, "content": msg["text"]})
+        messages.append({"role": "user", "content": req.transcript})
+        
+        # Try Groq with available models
+        for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]:
+            try:
+                response = groq_client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=150,
+                )
+                return {"text": response.choices[0].message.content}
+            except Exception as me:
+                print(f"Groq {model_name} failed: {me}")
+                continue
+
+        # Fallback to Gemini if Groq fails
+        if GEMINI_API_KEY:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=GEMINI_API_KEY)
+                g_model = genai.GenerativeModel("gemini-2.5-flash")
+                gemini_prompt = f"{system_prompt}\nStudent says: {req.transcript}"
+                g_res = g_model.generate_content(gemini_prompt)
+                if g_res.text:
+                    return {"text": g_res.text.strip()}
+            except Exception as ge:
+                print(f"Gemini conversation fallback failed: {ge}")
+
+        return {"text": "That is wonderful to hear! Consistent practice is the key to improvement."}
+    except Exception as e:
+        print("Groq Exception:", str(e))
+        return {"text": "That is wonderful to hear! Consistent practice is the key to improvement."}
+
+class TTSRequest(BaseModel):
+    text: str
+
+@router.post("/tts")
+async def tts(req: TTSRequest, current_student: str = Depends(verify_student_token)):
+    text = req.text
+    chunks = [text[i:i + MAX_CHUNK_SIZE] for i in range(0, len(text), MAX_CHUNK_SIZE)]
+    combined_audio = b""
+    
+    try:
+        for chunk in chunks:
+            encoded_chunk = quote(chunk)
+            url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
+            response = requests.get(url)
+            if response.status_code == 200:
+                combined_audio += response.content
+            else:
+                print(f"Google TTS Error for chunk: {response.text}")
+        
+        if combined_audio:
+            audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
+            return {"audio": audio_base64, "format": "mp3"}
+        else:
+            return {"audio": ""}
+    except Exception as e:
+        print("TTS Exception:", str(e))
+        return {"audio": ""}
+
+@router.websocket("/chat_stream")
+async def chat_stream(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if token:
+        try:
+            jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        except Exception:
+            await websocket.close(code=1008)
+            return
+
+    await websocket.accept()
+    
+    if not GROQ_API_KEY:
+        await websocket.close(code=1008)
+        return
+        
+    from groq import Groq
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            msg_type = payload.get("type")
+            print(f"[CHAT_STREAM] Received message type: {msg_type}")
+            
+            if msg_type == "ping":
+                continue
+                
+            is_start = (msg_type == "start")
+            transcript = payload.get("transcript")
+            
+            if not transcript and not is_start:
+                continue
+                
+            if transcript:
+                print(f"[CHAT_STREAM] User transcript: {transcript}")
+                await websocket.send_json({"type": "transcript", "text": transcript})
+            
+            history = payload.get("history", [])
+            cefrLevel = payload.get("cefrLevel", "B1")
+            lesson = payload.get("lesson")
+            
+            system_prompt = f"You are a friendly English conversation partner for a {cefrLevel} student."
+            if lesson:
+                system_prompt = f"""You are playing a role for a lesson: '{lesson.get('title')}'.
+Your Role: {lesson.get('aiRole')}
+The Context: {lesson.get('context')}
+The Student's Objective: {lesson.get('objective')}
+Stay in character and help the student achieve their objective through conversation."""
+
+            if is_start:
+                system_prompt += "\n\nThis is the very beginning of the conversation. Start the roleplay by greeting the student naturally according to the context and your role. Keep it short and engaging!"
+
+            if cefrLevel in ("A1", "A2"):
+                length_rule = (
+                    "RESPONSE LENGTH (STRICT): You are speaking with a BEGINNER. "
+                    "Respond in 1–2 very short, simple sentences MAXIMUM. "
+                    "Use only basic, everyday vocabulary. Never write a paragraph."
+                )
+            elif cefrLevel in ("B1", "B2"):
+                length_rule = (
+                    "RESPONSE LENGTH: Keep responses to 2–3 sentences. "
+                    "Use natural conversational English with common vocabulary."
+                )
+            else:
+                length_rule = "RESPONSE LENGTH: Keep responses concise, 2–3 sentences at most."
+
+            system_prompt += f"""
+{length_rule}
+
+ABSOLUTE RULES (never break these):
+- NEVER include stage directions, gestures, or actions such as *smiles*, *nods*, *laughs*, *sighs*, or any text wrapped in asterisks (*...*). Speak only in plain words.
+- Do NOT correct the student's grammar during the conversation; keep the flow going.
+- Ask one short follow-up question to keep the conversation moving.
+
+STRICT RULE: If the user's input is NOT in English (e.g., they speak in another language), do not answer their question or continue the topic. Instead, politely nudge them to try speaking in English. For example: "I'm sorry, I didn't quite understand. Could you try saying that in English?"
+"""
+            messages = [{"role": "system", "content": system_prompt}]
+            for msg in history:
+                role = "assistant" if msg["role"] == "ai" else "user"
+                messages.append({"role": role, "content": msg["text"]})
+            if transcript:
+                messages.append({"role": "user", "content": transcript})
+            
+            try:
+                print(f"[CHAT_STREAM] Calling Groq with {len(messages)} messages...")
+                response = groq_client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=120,
+                )
+                raw_ai_text = response.choices[0].message.content
+                full_ai_text = re.sub(r'\*[^*]+\*', '', raw_ai_text).strip()
+                full_ai_text = re.sub(r'  +', ' ', full_ai_text).strip()
+
+                print(f"[CHAT_STREAM] Groq response: {full_ai_text}")
+                await websocket.send_json({"type": "text", "text": full_ai_text})
+                
+                try:
+                    text_to_speak = full_ai_text
+                    chunks = [text_to_speak[i:i + MAX_CHUNK_SIZE] for i in range(0, len(text_to_speak), MAX_CHUNK_SIZE)]
+                    combined_audio = b""
+                    for idx, chunk in enumerate(chunks):
+                        encoded_chunk = quote(chunk)
+                        tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
+                        tts_resp = requests.get(tts_url, headers={"User-Agent": "Mozilla/5.0"})
+                        if tts_resp.status_code == 200:
+                            combined_audio += tts_resp.content
+                    if combined_audio:
+                        audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
+                        await websocket.send_json({"type": "audio", "audio": audio_base64})
+                except Exception as tts_err:
+                    print("[CHAT_STREAM] Google TTS exception:", tts_err)
+
+                await websocket.send_json({"type": "done", "full_text": full_ai_text.strip()})
+            except Exception as generation_err:
+                print(f"[CHAT_STREAM] Error during Groq generation: {generation_err}")
+                await websocket.send_json({"type": "done", "full_text": "I'm having a bit of trouble connecting right now."})
+                
+    except WebSocketDisconnect:
+        print("[CHAT_STREAM] WebSocket Client disconnected")
+    except Exception as e:
+        print(f"[CHAT_STREAM] WebSocket Exception: {e}")
+
+@router.get("/auth/deepgram")
+async def get_deepgram_token(current_student: str = Depends(verify_student_token)):
+    if not DEEPGRAM_API_KEY:
+        raise HTTPException(status_code=500, detail="Deepgram API key not configured")
+    return {"key": DEEPGRAM_API_KEY}
