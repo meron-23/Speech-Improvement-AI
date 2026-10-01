@@ -54,6 +54,8 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   // Buffer raw audio chunks during LISTENING to use as fallback STT for non-English speech
   const audioChunkBufferRef = useRef([]);
 
+  const processingTimeoutRef = useRef(null);
+
   useEffect(() => {
     conversationRef.current = conversation;
     isEndingRef.current = isEnding;
@@ -64,6 +66,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
     return () => {
       stopMedia();
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
@@ -79,6 +82,21 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const updateVadState = (newState) => {
     vadStateRef.current = newState;
     setVadState(newState);
+
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = null;
+    }
+
+    if (newState === 'PROCESSING') {
+      processingTimeoutRef.current = setTimeout(() => {
+        if (vadStateRef.current === 'PROCESSING' && !isEndingRef.current) {
+          console.warn("Processing timed out, recovering to LISTENING");
+          updateVadState('LISTENING');
+          startVoiceCapture();
+        }
+      }, 12000);
+    }
   };
 
   function stopMicAndSTT() {
@@ -194,11 +212,14 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         if (!aiText) return;
         setConversation(prev => {
           const lastMsg = prev[prev.length - 1];
+          let updated;
           if (lastMsg && lastMsg.role === 'ai') {
-            return [...prev.slice(0, -1), { role: 'ai', text: lastMsg.text + aiText }];
+            updated = [...prev.slice(0, -1), { role: 'ai', text: lastMsg.text + aiText }];
           } else {
-            return [...prev, { role: 'ai', text: aiText }];
+            updated = [...prev, { role: 'ai', text: aiText }];
           }
+          conversationRef.current = updated;
+          return updated;
         });
       }
       if (data.type === 'done') {
