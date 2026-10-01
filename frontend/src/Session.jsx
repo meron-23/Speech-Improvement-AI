@@ -29,6 +29,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const chatEndRef = useRef(null);
   const vadStateRef = useRef('IDLE');
   const conversationRef = useRef([]);
+  const initialPromptPendingRef = useRef(false);
   const isEndingRef = useRef(false);
   const [userTurnCount, setUserTurnCount] = useState(0);
   const userTurnCountRef = useRef(0);
@@ -146,8 +147,9 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         }
       }, 30000);
 
-      // If this is a new session, ask the AI to start the conversation
-      if (conversationRef.current.length === 0) {
+      // Send the initial prompt once for each newly started session.
+      if (initialPromptPendingRef.current) {
+        initialPromptPendingRef.current = false;
         updateVadState('PROCESSING');
         ws.send(JSON.stringify({
           type: 'start',
@@ -406,6 +408,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
   const startConversation = () => {
     if (isEnding || outcome) return;
+    initialPromptPendingRef.current = true;
     // Reset user turn counter at the start of a new session
     setUserTurnCount(0);
     userTurnCountRef.current = 0;
