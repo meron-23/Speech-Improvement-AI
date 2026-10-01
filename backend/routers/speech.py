@@ -109,7 +109,7 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
         messages.append({"role": "user", "content": req.transcript})
         
         # Try Groq with available models
-        for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]:
+        for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
             try:
                 response = groq_client.chat.completions.create(
                     model=model_name,
@@ -251,30 +251,68 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                 messages.append({"role": role, "content": msg["text"]})
             if transcript:
                 messages.append({"role": "user", "content": transcript})
+            elif is_start:
+                messages.append({
+                    "role": "user",
+                    "content": "Hello! Please start our conversation roleplay according to your role and context."
+                })
             
             try:
                 print(f"[CHAT_STREAM] Calling Groq with {len(messages)} messages...")
-                response = groq_client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=120,
-                )
-                raw_ai_text = response.choices[0].message.content
-                full_ai_text = re.sub(r'\*[^*]+\*', '', raw_ai_text).strip()
-                full_ai_text = re.sub(r'  +', ' ', full_ai_text).strip()
+                full_ai_text = None
+                for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+                    try:
+                        response = groq_client.chat.completions.create(
+                            model=model_name,
+                            messages=messages,
+                            temperature=0.7,
+                            max_tokens=120,
+                        )
+                        if response.choices and response.choices[0].message.content:
+                            raw_ai_text = response.choices[0].message.content
+                            cleaned = re.sub(r'\*[^*]+\*', '', raw_ai_text).strip()
+                            cleaned = re.sub(r'  +', ' ', cleaned).strip()
+                            if cleaned:
+                                full_ai_text = cleaned
+                                break
+                    except Exception as me:
+                        print(f"[CHAT_STREAM] Groq model {model_name} failed: {me}")
+                        continue
 
-                print(f"[CHAT_STREAM] Groq response: {full_ai_text}")
+                # Fallback to Gemini if Groq models fail
+                if not full_ai_text and GEMINI_API_KEY:
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=GEMINI_API_KEY)
+                        g_model = genai.GenerativeModel("gemini-2.5-flash")
+                        gemini_history_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+                        g_res = g_model.generate_content(gemini_history_text)
+                        if g_res.text:
+                            raw_ai_text = g_res.text.strip()
+                            cleaned = re.sub(r'\*[^*]+\*', '', raw_ai_text).strip()
+                            cleaned = re.sub(r'  +', ' ', cleaned).strip()
+                            if cleaned:
+                                full_ai_text = cleaned
+                    except Exception as ge:
+                        print(f"[CHAT_STREAM] Gemini fallback failed: {ge}")
+
+                if not full_ai_text:
+                    full_ai_text = "Hello! I'm your English conversation partner. How are you doing today?"
+
+                print(f"[CHAT_STREAM] Groq/Gemini response: {full_ai_text}")
                 await websocket.send_json({"type": "text", "text": full_ai_text})
                 
                 try:
-                    text_to_speak = full_ai_text
+                    text_to_speak = re.sub(r'[\r\n]+', ' ', full_ai_text).strip()
+                    text_to_speak = re.sub(r'[*_#`]', '', text_to_speak).strip()
                     chunks = [text_to_speak[i:i + MAX_CHUNK_SIZE] for i in range(0, len(text_to_speak), MAX_CHUNK_SIZE)]
                     combined_audio = b""
                     for idx, chunk in enumerate(chunks):
-                        encoded_chunk = quote(chunk)
+                        if not chunk.strip():
+                            continue
+                        encoded_chunk = quote(chunk.strip())
                         tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
-                        tts_resp = requests.get(tts_url, headers={"User-Agent": "Mozilla/5.0"})
+                        tts_resp = requests.get(tts_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
                         if tts_resp.status_code == 200:
                             combined_audio += tts_resp.content
                     if combined_audio:
@@ -286,7 +324,9 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                 await websocket.send_json({"type": "done", "full_text": full_ai_text.strip()})
             except Exception as generation_err:
                 print(f"[CHAT_STREAM] Error during Groq generation: {generation_err}")
-                await websocket.send_json({"type": "done", "full_text": "I'm having a bit of trouble connecting right now."})
+                fallback_msg = "I'm having a bit of trouble connecting right now. Please try again!"
+                await websocket.send_json({"type": "text", "text": fallback_msg})
+                await websocket.send_json({"type": "done", "full_text": fallback_msg})
                 
     except WebSocketDisconnect:
         print("[CHAT_STREAM] WebSocket Client disconnected")

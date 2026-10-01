@@ -173,7 +173,7 @@ Assessment guidance:
 Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                     
                     response = groq_client.chat.completions.create(
-                        model="llama-3.1-8b-instant",
+                        model="qwen/qwen3.8-27b",
                         messages=[{"role": "user", "content": eval_prompt}],
                         temperature=0.1,
                     )
@@ -340,7 +340,7 @@ Conversation:
 {full_conversation}"""
         
         content = None
-        for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]:
+        for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
             try:
                 response = groq_client.chat.completions.create(
                     model=model_name,

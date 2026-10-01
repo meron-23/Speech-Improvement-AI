@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import hashlib
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -397,7 +398,11 @@ async def create_prompt(prompt: WritingPromptCreateRequest, current_student: str
 
 @router.post("/assess")
 async def assess_writing(req: WritingAssessRequest, current_student: str = Depends(verify_student_token)):
-    """Assess a student's writing using Groq AI with automatic fallback to Gemini and local heuristics."""
+    """Assess a student's writing using Groq AI with automatic fallback to Gemini and local heuristics.
+    
+    Results are cached in Firestore keyed by a hash of the submission so the same text always
+    returns the same scores (fully deterministic). Temperature is set to 0 for the same reason.
+    """
     text = (req.text or "").strip()
     if len(text) < 15:
         raise HTTPException(status_code=400, detail="Writing submission is too short to evaluate. Please write at least one complete sentence.")
@@ -405,6 +410,25 @@ async def assess_writing(req: WritingAssessRequest, current_student: str = Depen
     words = re.findall(r"\b\w+\b", text)
     word_count = len(words)
     reading_time = round(word_count / 180, 1)
+
+    # --- Build a deterministic cache key from the exact submission content ---
+    cache_key_raw = f"{text}|{req.cefrLevel}|{req.promptId or ''}|{req.promptTitle or ''}"
+    cache_hash = hashlib.sha256(cache_key_raw.encode("utf-8")).hexdigest()
+
+    # --- Check Firestore cache first ---
+    if db:
+        try:
+            cached_doc = db.collection("writing_assessments_cache").document(cache_hash).get()
+            if cached_doc.exists:
+                cached = cached_doc.to_dict()
+                print(f"DEBUG: Returning cached assessment for hash {cache_hash[:12]}...")
+                # Always refresh wordCount/readingTime in case text was trimmed slightly
+                cached["wordCount"] = word_count
+                cached["readingTime"] = reading_time
+                cached["fromCache"] = True
+                return {"assessment": cached}
+        except Exception as cache_err:
+            print(f"DEBUG: Cache lookup failed (non-fatal): {cache_err}")
 
     user_prompt_content = f"""Student Target Level: {req.cefrLevel}
 Writing Prompt Title: {req.promptTitle or 'Free Writing Exercise'}
@@ -416,7 +440,9 @@ Student's Written Submission:
 ---
 Perform a full assessment according to the specified JSON schema."""
 
-    # 1. Primary Attempt: Groq AI
+    assessment = None
+
+    # 1. Primary Attempt: Groq AI (temperature=0 for deterministic output)
     if GROQ_API_KEY:
         for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]:
             try:
@@ -429,20 +455,18 @@ Perform a full assessment according to the specified JSON schema."""
                         {"role": "user", "content": user_prompt_content}
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0.3,
+                    temperature=0,
                     max_tokens=2000
                 )
                 raw_json = res.choices[0].message.content
                 assessment = _clean_json_response(raw_json)
-                assessment["wordCount"] = word_count
-                assessment["readingTime"] = reading_time
                 assessment["evaluatorModel"] = f"Groq ({model_name})"
-                return {"assessment": assessment}
+                break
             except Exception as e:
                 print(f"DEBUG: Groq evaluation with {model_name} failed: {e}")
 
-    # 2. Secondary Attempt: Google Gemini Flash
-    if GEMINI_API_KEY:
+    # 2. Secondary Attempt: Google Gemini Flash (temperature=0)
+    if not assessment and GEMINI_API_KEY:
         for gemini_model_name in ["gemini-2.5-flash", "gemini-flash-latest"]:
             try:
                 import google.generativeai as genai
@@ -450,22 +474,35 @@ Perform a full assessment according to the specified JSON schema."""
                 model = genai.GenerativeModel(gemini_model_name)
                 res = model.generate_content(
                     f"{ASSESSMENT_SYSTEM_PROMPT}\n\n{user_prompt_content}",
-                    generation_config={"response_mime_type": "application/json", "temperature": 0.3}
+                    generation_config={"response_mime_type": "application/json", "temperature": 0}
                 )
                 assessment = _clean_json_response(res.text)
-                assessment["wordCount"] = word_count
-                assessment["readingTime"] = reading_time
                 assessment["evaluatorModel"] = f"Gemini ({gemini_model_name})"
-                return {"assessment": assessment}
+                break
             except Exception as ge:
                 print(f"DEBUG: Gemini evaluation with {gemini_model_name} failed: {ge}")
 
-    # 3. Final Fallback: Heuristic Evaluator
-    print("DEBUG: Using heuristic fallback assessment.")
-    assessment = _heuristic_fallback_assessment(text, req.cefrLevel)
+    # 3. Final Fallback: Heuristic Evaluator (always deterministic)
+    if not assessment:
+        print("DEBUG: Using heuristic fallback assessment.")
+        assessment = _heuristic_fallback_assessment(text, req.cefrLevel)
+        assessment["evaluatorModel"] = "Local Heuristic Engine"
+
+    # Attach metadata
     assessment["wordCount"] = word_count
     assessment["readingTime"] = reading_time
-    assessment["evaluatorModel"] = "Local Heuristic Engine"
+    assessment["fromCache"] = False
+
+    # --- Store result in Firestore cache for future identical submissions ---
+    if db:
+        try:
+            db.collection("writing_assessments_cache").document(cache_hash).set(
+                assessment, merge=False
+            )
+            print(f"DEBUG: Cached assessment under hash {cache_hash[:12]}...")
+        except Exception as save_err:
+            print(f"DEBUG: Cache save failed (non-fatal): {save_err}")
+
     return {"assessment": assessment}
 
 @router.post("/save")
