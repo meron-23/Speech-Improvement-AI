@@ -23,8 +23,8 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const RESULT_METRICS = ['Grammar', 'Accuracy'];
   const T = amharic ? AM : EN;
   const METRIC_COLORS = {
-    Grammar: '#10b981',
-    Accuracy: '#8b5cf6'
+    Grammar: '#3BBFA6',
+    Accuracy: '#1B6B4A'
   };
   const chatEndRef = useRef(null);
   const vadStateRef = useRef('IDLE');
@@ -114,9 +114,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
   // --- Backend WebSocket (Groq + Cartesia) ---
   const connectBackendWebSocket = () => {
-    const wsUrl = API_BASE_URL.replace('http', 'ws') + '/chat_stream';
+    const tokenParam = student?.token ? `?token=${encodeURIComponent(student.token)}` : '';
+    const wsUrl = API_BASE_URL.replace('http', 'ws') + '/chat_stream' + tokenParam;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+
 
     ws.onopen = () => {
       // Send a keep‑alive ping every 30 seconds to avoid idle timeouts
@@ -338,8 +340,15 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
                 const formData = new FormData();
                 formData.append('audio', blob, 'speech.webm');
 
-                fetch(`${API_BASE_URL}/stt`, { method: 'POST', body: formData })
+                fetch(`${API_BASE_URL}/stt`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${student?.token || ''}`
+                  },
+                  body: formData
+                })
                   .then(res => res.json())
+
                   .then(data => {
                     const transcript = data.text?.trim();
                     if (transcript) {
@@ -429,9 +438,10 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     stopMedia();
 
     try {
+      const authHeader = student?.token ? { 'Authorization': `Bearer ${student.token}` } : {};
       const feedbackRes = await fetch(`${API_BASE_URL}/feedback`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
           conversation: conversationRef.current,
           cefrLevel: student.cefrLevel,
@@ -451,7 +461,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
       const saveRes = await fetch(`${API_BASE_URL}/session/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
           studentId: student.studentId,
           cefrLevel: student.cefrLevel,
@@ -488,12 +498,14 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const handleUpdateLevel = async () => {
     if (!selectedCefr) return;
     try {
+      const authHeader = student?.token ? { 'Authorization': `Bearer ${student.token}` } : {};
       const res = await fetch(`${API_BASE_URL}/student/update`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({ studentId: student.studentId, cefrLevel: selectedCefr })
       });
       const data = await res.json();
+
 
       // Update parent student state so both UI and local storage are synchronized immediately
       if (onSessionComplete && data.student) {
@@ -575,7 +587,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const getMetricByName = (name) => getReport().metrics.find(metric => metric.name === name);
 
   const renderScoreBar = (metric) => {
-    const color = METRIC_COLORS[metric.name] || '#9E2891';
+    const color = METRIC_COLORS[metric.name] || '#1B6B4A';
     return (
       <div className="result-card-bar">
         <div className="result-card-fill" style={{ width: `${Math.max(0, Math.min(metric.percent, 100))}%`, background: color }} />
@@ -657,7 +669,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const renderMetricDetail = () => {
     const metric = getMetricByName(selectedMetric) || getReport().metrics[0];
     if (!metric) return renderResultsOverview();
-    const color = METRIC_COLORS[metric.name] || '#9E2891';
+    const color = METRIC_COLORS[metric.name] || '#1B6B4A';
 
     return (
       <div className="assessment-shell">
@@ -669,7 +681,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         </div>
         <div className="assessment-content detail">
           <h2 className="metric-title" style={{ color }}>{metric.name}</h2>
-          <div className="score-ring" style={{ background: `conic-gradient(${color} ${metric.percent * 3.6}deg, #eef2f7 0deg)` }}>
+          <div className="score-ring" style={{ background: `conic-gradient(${color} ${metric.percent * 3.6}deg, #EAE7D5 0deg)` }}>
             <div className="score-ring-inner">{metric.percent}%</div>
           </div>
           <p className="metric-note">
@@ -925,10 +937,10 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
             disabled={vadState === 'PROCESSING' || isEnding}
             style={{
               padding: '12px 20px',
-              background: '#9E2891',
+              background: '#E8533A',
               color: 'white',
               border: 'none',
-              borderRadius: '12px',
+              borderRadius: '100px',
               fontWeight: '700',
               cursor: 'pointer'
             }}

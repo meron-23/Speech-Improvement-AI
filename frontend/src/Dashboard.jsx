@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Flame, CheckCircle2, Lock, PlayCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Flame, CheckCircle2, Lock, PlayCircle, PenTool, Sparkles } from 'lucide-react';
 import { AM, EN } from './Layout';
 
 function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onViewHistory, amharic }) {
+  const navigate = useNavigate();
   const [modules, setModules] = useState([]);
   const [activeModuleId, setActiveModuleId] = useState(null);
   const [passedLessonIds, setPassedLessonIds] = useState(new Set());
@@ -139,6 +141,79 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
             <span className="progress-subtext">{T.cefrProgress}</span>
           </div>
         </div>
+      </div>
+
+      {/* Writing Studio Quick Access Banner */}
+      <div
+        onClick={() => navigate('/writing')}
+        style={{
+          backgroundColor: '#ffffff',
+          borderRadius: '16px',
+          padding: '1.25rem 1.5rem',
+          marginBottom: '1.5rem',
+          border: '1px solid rgba(158, 40, 145, 0.15)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.02)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          background: 'linear-gradient(135deg, rgba(158, 40, 145, 0.05) 0%, rgba(229, 169, 53, 0.05) 100%)',
+          transition: 'transform 0.2s, box-shadow 0.2s'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{
+            backgroundColor: 'var(--primary)',
+            color: '#ffffff',
+            padding: '12px',
+            borderRadius: '12px',
+            display: 'flex',
+            boxShadow: '0 4px 12px rgba(158, 40, 145, 0.2)'
+          }}>
+            <PenTool size={22} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                {amharic ? 'አዲሱ የ AI ጽሑፍ ማዕከል' : 'AI Writing Practice Studio'}
+              </h4>
+              <span style={{
+                backgroundColor: 'rgba(158, 40, 145, 0.1)',
+                color: 'var(--primary)',
+                fontSize: '0.7rem',
+                fontWeight: 800,
+                padding: '2px 8px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}>
+                <Sparkles size={11} /> FREE AI
+              </span>
+            </div>
+            <p style={{ margin: '3px 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              {amharic
+                ? 'ድርሰቶችዎን፣ ኢሜይሎችዎንና ሃሳቦችዎን ይጻፉ፤ በሰዋስው፣ ፊደል አጻጻፍ እና CEFR ደረጃ ፈጣን AI ውጤት ያግኙ።'
+                : 'Practice essays, emails, and reflections with instant AI grammar, spelling, and CEFR grading.'}
+            </p>
+          </div>
+        </div>
+        <button style={{
+          backgroundColor: 'var(--primary)',
+          color: '#ffffff',
+          border: 'none',
+          padding: '8px 18px',
+          borderRadius: '10px',
+          fontWeight: 700,
+          fontSize: '0.85rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          cursor: 'pointer',
+          boxShadow: '0 2px 8px rgba(158, 40, 145, 0.2)'
+        }}>
+          {amharic ? 'አሁን ጻፍ' : 'Practice Writing'} <PlayCircle size={16} />
+        </button>
       </div>
 
       {/* Current Mission Banner */}

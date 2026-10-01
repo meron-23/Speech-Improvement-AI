@@ -1,9 +1,12 @@
 import React from 'react';
-import { FileText, BarChart2, LogOut, Mic, BookOpen } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { FileText, BarChart2, LogOut, Mic, BookOpen, PenTool } from 'lucide-react';
+
 
 // Amharic translation map for all UI navigation / experience strings
 export const AM = {
   practice:          'ልምምድ',
+  writing:           'የጽሑፍ ልምምድ',
   sessions:          'ክፍለ ጊዜዎች',
   progress:          'እድገት',
   vocabulary:        'ቃላት',
@@ -106,6 +109,7 @@ export const AM = {
 
 export const EN = {
   practice:          'Practice',
+  writing:           'Writing',
   sessions:          'Sessions',
   progress:          'Progress',
   vocabulary:        'Vocabulary',
@@ -208,13 +212,21 @@ export const EN = {
 
 function Layout({ student, currentView, setCurrentView, onLogout, amharic, setAmharic, children }) {
   const T = amharic ? AM : EN;
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const navItems = [
-    { view: 'DASHBOARD', label: T.practice,  Icon: Mic },
-    { view: 'HISTORY',   label: T.sessions,  Icon: FileText },
-    { view: 'PROGRESS',  label: T.progress,  Icon: BarChart2 },
-    { view: 'VOCABULARY', label: T.vocabulary, Icon: BookOpen },
+    { view: 'DASHBOARD', path: '/dashboard', label: T.practice,  Icon: Mic },
+    { view: 'WRITING',   path: '/writing',   label: T.writing || 'Writing', Icon: PenTool },
+    { view: 'HISTORY',   path: '/history',   label: T.sessions,  Icon: FileText },
+    { view: 'PROGRESS',  path: '/progress',  label: T.progress,  Icon: BarChart2 },
+    { view: 'VOCABULARY', path: '/vocabulary', label: T.vocabulary, Icon: BookOpen },
   ];
+
+  const handleNavClick = (view, path) => {
+    if (setCurrentView) setCurrentView(view);
+    navigate(path);
+  };
 
   return (
     <div className="layout-container">
@@ -233,17 +245,21 @@ function Layout({ student, currentView, setCurrentView, onLogout, amharic, setAm
         </div>
 
         <nav className="sidebar-nav">
-          {navItems.map(({ view, label, Icon }) => (
-            <button
-              key={view}
-              className={`nav-item ${currentView === view || (view === 'DASHBOARD' && currentView === 'SESSION') ? 'active' : ''}`}
-              onClick={() => setCurrentView(view)}
-            >
-              <Icon size={20} className="nav-icon" />
-              {label}
-            </button>
-          ))}
+          {navItems.map(({ view, path, label, Icon }) => {
+            const isActive = location.pathname === path || (path === '/dashboard' && location.pathname === '/session');
+            return (
+              <button
+                key={view}
+                className={`nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => handleNavClick(view, path)}
+              >
+                <Icon size={20} className="nav-icon" />
+                {label}
+              </button>
+            );
+          })}
         </nav>
+
 
         <div className="sidebar-footer">
           <div className="user-profile-bottom">
@@ -268,12 +284,12 @@ function Layout({ student, currentView, setCurrentView, onLogout, amharic, setAm
             onClick={() => setAmharic(!amharic)}
             title={amharic ? 'Switch to English' : 'ወደ አማርኛ ቀይር'}
             style={{
-              background: amharic ? '#9E2891' : '#f1f5f9',
-              color:      amharic ? '#ffffff' : '#64748b',
+              background: amharic ? '#1B6B4A' : '#EAE7D5',
+              color:      amharic ? '#ffffff' : '#5a6272',
               border: 'none',
-              borderRadius: '8px',
-              padding: '6px 12px',
-              fontSize: '0.85rem',
+              borderRadius: '100px',
+              padding: '6px 14px',
+              fontSize: '0.82rem',
               fontWeight: '700',
               cursor: 'pointer',
               letterSpacing: '0.05em',

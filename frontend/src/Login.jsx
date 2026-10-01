@@ -49,12 +49,12 @@ function Login({ onLogin, amharic, setAmharic }) {
           onClick={() => setAmharic(!amharic)}
           title={amharic ? 'Switch to English' : 'ወደ አማርኛ ቀይር'}
           style={{
-            background: amharic ? '#9E2891' : '#ffffff',
-            color:      amharic ? '#ffffff' : '#64748b',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '6px 12px',
-            fontSize: '0.85rem',
+            background: amharic ? '#1B6B4A' : '#ffffff',
+            color:      amharic ? '#ffffff' : '#5a6272',
+            border: '1.5px solid #EAE7D5',
+            borderRadius: '100px',
+            padding: '6px 14px',
+            fontSize: '0.82rem',
             fontWeight: '700',
             cursor: 'pointer',
             letterSpacing: '0.05em',

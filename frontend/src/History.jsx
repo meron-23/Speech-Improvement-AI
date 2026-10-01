@@ -53,7 +53,26 @@ function History({ student, sessions, lessons = [], dataLoading, amharic }) {
   const toggleGroup = (key) =>
     setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const handleExport = () => window.open(`${API_BASE_URL}/export`, '_blank');
+  const handleExport = async () => {
+    try {
+      const headers = student?.token ? { 'Authorization': `Bearer ${student.token}` } : {};
+      const res = await fetch(`${API_BASE_URL}/export`, { headers });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sessions_export_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export error:', err);
+      alert('Export failed. Please check your credentials.');
+    }
+  };
+
 
   // ── DETAIL VIEW ──────────────────────────────────────────────────────────────
   if (selectedSession) {

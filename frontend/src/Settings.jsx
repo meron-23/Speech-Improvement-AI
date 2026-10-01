@@ -56,15 +56,17 @@ function Settings({ student, onUpdateStudent }) {
 
     try {
       // 1. Update Profile in Firestore
+      const authHeader = student?.token ? { 'Authorization': `Bearer ${student.token}` } : {};
       const res = await fetch(`${API_BASE_URL}/student/update`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
           studentId: student.studentId,
           name,
           cefrLevel
         })
       });
+
 
       if (!res.ok) {
         const errData = await res.json();

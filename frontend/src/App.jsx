@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Login from './Login';
 import Dashboard from './Dashboard';
 import Session from './Session';
@@ -6,15 +7,18 @@ import History from './History';
 import Progress from './Progress.jsx';
 import Settings from './Settings';
 import Vocabulary from './Vocabulary';
+import Writing from './Writing';
 import Layout from './Layout';
 import API_BASE_URL from './config';
 
 function App() {
-  const [currentView, setCurrentView] = useState('LOADING');
+  const navigate = useNavigate();
+  const location = useLocation();
   const [student, setStudent] = useState(null);
   const [showTestPrompt, setShowTestPrompt] = useState(false);
   const [selectedLesson, setSelectedLesson] = useState(null);
-  const [amharic, setAmharic] = useState(true); // default Amharic UI
+  const [amharic, setAmharic] = useState(true);
+  const [isInitializing, setIsInitializing] = useState(true);
 
   // --- Shared cached data (fetched once, passed as props) ---
   const [sharedSessions, setSharedSessions] = useState([]);
@@ -25,9 +29,10 @@ function App() {
     if (!studentData) return;
     setDataLoading(true);
     try {
+      const headers = studentData.token ? { 'Authorization': `Bearer ${studentData.token}` } : {};
       const [sessionsRes, lessonsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/sessions?studentId=${studentData.studentId}`),
-        fetch(`${API_BASE_URL}/lessons?level=${studentData.cefrLevel}`)
+        fetch(`${API_BASE_URL}/sessions?studentId=${studentData.studentId}`, { headers }),
+        fetch(`${API_BASE_URL}/lessons?level=${studentData.cefrLevel}`, { headers })
       ]);
       if (sessionsRes.ok) {
         const data = await sessionsRes.json();
@@ -44,25 +49,20 @@ function App() {
     }
   }, []);
 
-  // Re-fetch both the student profile from Firestore AND session/lesson data.
-  // Called whenever the user navigates back to the Dashboard so the unlocked
-  // lessons always reflect the most up-to-date Firestore state.
   const refreshStudentAndData = useCallback(async (currentStudent) => {
     const s = currentStudent;
     if (!s) return;
-    // Kick off shared data refresh immediately (uses cached studentId/level)
     fetchSharedData(s);
-    // Simultaneously sync the student profile from Firestore
     try {
-      const res = await fetch(`${API_BASE_URL}/student/${s.studentId}`);
+      const headers = s.token ? { 'Authorization': `Bearer ${s.token}` } : {};
+      const res = await fetch(`${API_BASE_URL}/student/${s.studentId}`, { headers });
       if (!res.ok) return;
       const data = await res.json();
       if (data.student) {
-        const fresh = data.student;
+        const fresh = { ...data.student, token: s.token };
         setStudent(fresh);
         localStorage.setItem('speech_ai_student', JSON.stringify(fresh));
         if (fresh.levelComplete) setShowTestPrompt(true);
-        // Refresh shared data again with potentially updated CEFR level
         fetchSharedData(fresh);
       }
     } catch (err) {
@@ -75,52 +75,36 @@ function App() {
     if (savedStudent) {
       const parsed = JSON.parse(savedStudent);
       setStudent(parsed);
-
-      // Restore saved view or default to DASHBOARD
-      const savedView = localStorage.getItem('speech_ai_view');
-      setCurrentView(savedView || 'DASHBOARD');
-
       if (parsed.levelComplete) setShowTestPrompt(true);
-
-      // Fetch shared data (sessions + lessons) once on load
       fetchSharedData(parsed);
 
-      // Perform a background sync with Firestore to fetch the absolute freshest profile state
-      fetch(`${API_BASE_URL}/student/${parsed.studentId}`)
+      const headers = parsed.token ? { 'Authorization': `Bearer ${parsed.token}` } : {};
+      fetch(`${API_BASE_URL}/student/${parsed.studentId}`, { headers })
         .then(res => {
           if (!res.ok) throw new Error('Profile sync failed');
           return res.json();
         })
         .then(data => {
           if (data.student) {
-            setStudent(data.student);
-            localStorage.setItem('speech_ai_student', JSON.stringify(data.student));
-            if (data.student.levelComplete) {
-              setShowTestPrompt(true);
-            } else {
-              setShowTestPrompt(false);
-            }
+            const fresh = { ...data.student, token: parsed.token };
+            setStudent(fresh);
+            localStorage.setItem('speech_ai_student', JSON.stringify(fresh));
+            if (data.student.levelComplete) setShowTestPrompt(true);
           }
         })
-        .catch(err => console.error("Error syncing student profile on load:", err));
+        .catch(err => console.error("Error syncing student profile on load:", err))
+        .finally(() => setIsInitializing(false));
     } else {
-      setCurrentView('LOGIN');
+      setIsInitializing(false);
     }
   }, [fetchSharedData]);
-
-  // Sync currentView changes to localStorage to persist tab across refreshes
-  useEffect(() => {
-    if (currentView !== 'LOADING' && currentView !== 'LOGIN') {
-      localStorage.setItem('speech_ai_view', currentView);
-    }
-  }, [currentView]);
 
   const handleLoginSuccess = (studentData) => {
     localStorage.setItem('speech_ai_student', JSON.stringify(studentData));
     setStudent(studentData);
-    setCurrentView('DASHBOARD');
     if (studentData.levelComplete) setShowTestPrompt(true);
     fetchSharedData(studentData);
+    navigate('/dashboard');
   };
 
   const handleUpdateStudent = (updatedStudent) => {
@@ -130,107 +114,141 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('speech_ai_student');
-    localStorage.removeItem('speech_ai_view');
     setStudent(null);
-    setCurrentView('LOGIN');
+    navigate('/login');
   };
 
-  if (currentView === 'LOADING') return null;
+  if (isInitializing) return null;
 
   return (
     <div className="app-container">
-      {currentView === 'LOGIN' ? (
-        <Login onLogin={handleLoginSuccess} amharic={amharic} setAmharic={setAmharic} />
-      ) : (
-        <Layout
-          student={student}
-          currentView={currentView}
-          setCurrentView={setCurrentView}
-          onLogout={handleLogout}
-          amharic={amharic}
-          setAmharic={setAmharic}
-        >
-          {currentView === 'DASHBOARD' && (
-            <Dashboard
-              student={student}
-              sessions={sharedSessions}
-              lessons={sharedLessons}
-              dataLoading={dataLoading}
-              amharic={amharic}
-              onNewSession={(lesson) => {
-                setSelectedLesson(lesson || null);
-                setCurrentView('SESSION');
-              }}
-              onViewHistory={() => setCurrentView('HISTORY')}
-            />
-          )}
+      <Routes>
+        <Route
+          path="/login"
+          element={
+            student ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLoginSuccess} amharic={amharic} setAmharic={setAmharic} />
+          }
+        />
+        <Route
+          path="/*"
+          element={
+            !student ? (
+              <Navigate to="/login" replace />
+            ) : (
+              <Layout
+                student={student}
+                onLogout={handleLogout}
+                amharic={amharic}
+                setAmharic={setAmharic}
+              >
+                <Routes>
+                  <Route
+                    path="dashboard"
+                    element={
+                      <Dashboard
+                        student={student}
+                        sessions={sharedSessions}
+                        lessons={sharedLessons}
+                        dataLoading={dataLoading}
+                        amharic={amharic}
+                        onNewSession={(lesson) => {
+                          setSelectedLesson(lesson || null);
+                          navigate('/session');
+                        }}
+                        onViewHistory={() => navigate('/history')}
+                      />
+                    }
+                  />
+                  <Route
+                    path="session"
+                    element={
+                      <Session
+                        student={student}
+                        customLesson={selectedLesson}
+                        amharic={amharic}
+                        onViewDashboard={() => {
+                          setSelectedLesson(null);
+                          navigate('/dashboard');
+                          refreshStudentAndData(student);
+                        }}
+                        onSessionComplete={(updatedStudent) => {
+                          setStudent(updatedStudent);
+                          localStorage.setItem('speech_ai_student', JSON.stringify(updatedStudent));
+                          if (updatedStudent.levelComplete) setShowTestPrompt(true);
+                          setSelectedLesson(null);
+                          fetchSharedData(updatedStudent);
+                        }}
+                      />
+                    }
+                  />
+                  <Route
+                    path="history"
+                    element={
+                      <History
+                        student={student}
+                        sessions={sharedSessions}
+                        lessons={sharedLessons}
+                        dataLoading={dataLoading}
+                        amharic={amharic}
+                        onBack={() => navigate('/dashboard')}
+                      />
+                    }
+                  />
+                  <Route
+                    path="progress"
+                    element={
+                      <Progress
+                        student={student}
+                        sessions={sharedSessions}
+                        lessons={sharedLessons}
+                        dataLoading={dataLoading}
+                        amharic={amharic}
+                        onStartLesson={(lesson) => {
+                          setSelectedLesson(lesson || null);
+                          navigate('/session');
+                        }}
+                      />
+                    }
+                  />
+                  <Route
+                    path="vocabulary"
+                    element={
+                      <Vocabulary
+                        student={student}
+                        sessions={sharedSessions}
+                        lessons={sharedLessons}
+                        dataLoading={dataLoading}
+                        amharic={amharic}
+                      />
+                    }
+                  />
+                  <Route
+                    path="writing"
+                    element={
+                      <Writing
+                        student={student}
+                        amharic={amharic}
+                        onNavigateToPractice={() => navigate('/dashboard')}
+                      />
+                    }
+                  />
+                  <Route
+                    path="settings"
+                    element={
+                      <Settings
+                        student={student}
+                        onUpdateStudent={handleUpdateStudent}
+                      />
+                    }
+                  />
+                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                </Routes>
+              </Layout>
+            )
+          }
+        />
+      </Routes>
 
-          {currentView === 'SESSION' && (
-            <Session
-              student={student}
-              customLesson={selectedLesson}
-              amharic={amharic}
-              onViewDashboard={() => {
-                setSelectedLesson(null);
-                setCurrentView('DASHBOARD');
-                // Re-sync student & sessions so the next lesson appears unlocked
-                refreshStudentAndData(student);
-              }}
-              onSessionComplete={(updatedStudent) => {
-                setStudent(updatedStudent);
-                localStorage.setItem('speech_ai_student', JSON.stringify(updatedStudent));
-                if (updatedStudent.levelComplete) setShowTestPrompt(true);
-                setSelectedLesson(null);
-                // Refresh sessions cache after a new session is saved
-                fetchSharedData(updatedStudent);
-              }}
-            />
-          )}
-
-          {currentView === 'HISTORY' && (
-            <History
-              student={student}
-              sessions={sharedSessions}
-              lessons={sharedLessons}
-              dataLoading={dataLoading}
-              amharic={amharic}
-              onBack={() => setCurrentView('DASHBOARD')}
-            />
-          )}
-
-          {currentView === 'PROGRESS' && (
-            <Progress
-              student={student}
-              sessions={sharedSessions}
-              lessons={sharedLessons}
-              dataLoading={dataLoading}
-              amharic={amharic}
-              onStartLesson={(lesson) => {
-                setSelectedLesson(lesson || null);
-                setCurrentView('SESSION');
-              }}
-            />
-          )}
-
-
-          {currentView === 'VOCABULARY' && (
-            <Vocabulary 
-              student={student}
-              sessions={sharedSessions}
-              lessons={sharedLessons}
-              dataLoading={dataLoading}
-              amharic={amharic}
-            />
-          )}
-
-          {currentView === 'SETTINGS' && (
-            <Settings
-              student={student}
-              onUpdateStudent={handleUpdateStudent}
-            />
-          )}
-        </Layout>
-      )}
       {showTestPrompt && (
         <div style={{
           position: 'fixed',
@@ -266,9 +284,9 @@ function App() {
               alignItems: 'center',
               justifyContent: 'center',
               fontSize: '2.5rem',
-              backgroundColor: 'rgba(158, 40, 145, 0.1)',
-              color: '#9E2891',
-              boxShadow: '0 8px 16px rgba(158, 40, 145, 0.1)'
+              backgroundColor: 'rgba(27, 107, 74, 0.1)',
+              color: '#1B6B4A',
+              boxShadow: '0 8px 16px rgba(27, 107, 74, 0.1)'
             }}>
               🏆
             </div>
@@ -276,7 +294,7 @@ function App() {
               fontSize: '2rem',
               fontWeight: '800',
               marginBottom: '1rem',
-              background: 'linear-gradient(135deg, #9E2891 0%, #e5a935 100%)',
+              background: 'linear-gradient(135deg, #1A1A5C 0%, #1B6B4A 100%)',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
               letterSpacing: '-0.02em'
@@ -301,17 +319,17 @@ function App() {
                   display: 'block',
                   width: '100%',
                   padding: '14px',
-                  backgroundColor: '#9E2891',
+                  backgroundColor: '#E8533A',
                   color: '#ffffff',
-                  borderRadius: '12px',
+                  borderRadius: '100px',
                   fontWeight: '700',
                   textDecoration: 'none',
                   transition: 'all 0.2s',
-                  boxShadow: '0 4px 12px rgba(158, 40, 145, 0.3)',
+                  boxShadow: '0 8px 20px rgba(232, 83, 58, 0.35)',
                   boxSizing: 'border-box'
                 }}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#b53ba7'}
-                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#9E2891'}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#d14428'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#E8533A'}
               >
                 Take the CEFR Test 🌟
               </a>
