@@ -21,5 +21,5 @@ else:
         "http://127.0.0.1:5174",
         "http://127.0.0.1:5175",
         "http://127.0.0.1:3000",
-        "https://speech-improvement-ai.vercel.app",
+        "https://speech-improvement-git-6d8779-meronmuluye75-gmailcoms-projects.vercel.app"
     ]
