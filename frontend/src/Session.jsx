@@ -57,7 +57,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const processingTimeoutRef = useRef(null);
   const reconnectCountRef = useRef(0);
   const isReconnectingRef = useRef(false);
-  const sessionStartedRef = useRef(false);
+  const initialGreetingReceivedRef = useRef(false);
 
   useEffect(() => {
     conversationRef.current = conversation;
@@ -70,7 +70,9 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     return () => {
       stopMedia();
       if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
-      if (wsRef.current) wsRef.current.close();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) ws.close();
     };
   }, []);
 
@@ -94,6 +96,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     if (newState === 'PROCESSING') {
       processingTimeoutRef.current = setTimeout(() => {
         if (vadStateRef.current === 'PROCESSING' && !isEndingRef.current) {
+          if (!initialGreetingReceivedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+            setSttError('The AI did not respond. Reconnecting...');
+            wsRef.current.close(4000, 'Initial greeting timed out');
+            return;
+          }
           console.warn("Processing timed out, recovering to LISTENING");
           updateVadState('LISTENING');
           startVoiceCapture();
@@ -142,8 +149,6 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
 
     ws.onopen = () => {
-      // Successful (re-)connection - reset reconnect counters
-      reconnectCountRef.current = 0;
       isReconnectingRef.current = false;
 
       // Send a keep-alive ping every 30 seconds to avoid idle timeouts
@@ -153,9 +158,8 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         }
       }, 30000);
 
-      // Only send 'start' once per session (not on reconnects mid-session)
-      if (!sessionStartedRef.current && conversationRef.current.length === 0) {
-        sessionStartedRef.current = true;
+      // Retry the greeting after reconnects until an AI reply arrives.
+      if (!initialGreetingReceivedRef.current) {
         updateVadState('PROCESSING');
         ws.send(JSON.stringify({
           type: 'start',
@@ -167,12 +171,14 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     };
 
     ws.onerror = (err) => {
+      if (ws !== wsRef.current) return;
       console.error("WebSocket Error:", err);
       setSttError("Backend WebSocket connection failed. The server might have disconnected.");
       updateVadState('ERROR');
     };
 
     ws.onclose = (event) => {
+      if (ws !== wsRef.current) return;
       if (ws.pingInterval) clearInterval(ws.pingInterval);
 
       // Intentional close when session is ending — do nothing
@@ -196,10 +202,14 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
       // If we were mid-turn (PROCESSING), reset to LISTENING so user can re-speak
       if (vadStateRef.current === 'PROCESSING') {
-        setSttError('Connection briefly dropped. Please repeat your last message.');
-        setTimeout(() => setSttError(null), 4000);
-        updateVadState('LISTENING');
-        startVoiceCapture();
+        if (initialGreetingReceivedRef.current) {
+          setSttError('Connection briefly dropped. Please repeat your last message.');
+          setTimeout(() => setSttError(null), 4000);
+          updateVadState('LISTENING');
+          startVoiceCapture();
+        } else {
+          setSttError('The AI did not respond. Reconnecting...');
+        }
       }
 
       setTimeout(() => {
@@ -210,6 +220,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     };
 
     ws.onmessage = (event) => {
+      if (ws !== wsRef.current) return;
       const data = JSON.parse(event.data);
       if (data.type === 'transcript') {
         return;
@@ -223,6 +234,9 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
       if (data.type === 'text' || data.text) {
         const aiText = data.text;
         if (!aiText) return;
+        initialGreetingReceivedRef.current = true;
+        setSttError(null);
+        reconnectCountRef.current = 0;
         setConversation(prev => {
           const lastMsg = prev[prev.length - 1];
           let updated;
@@ -427,7 +441,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     userTurnCountRef.current = 0;
     reconnectCountRef.current = 0;
     isReconnectingRef.current = false;
-    sessionStartedRef.current = false;
+    initialGreetingReceivedRef.current = false;
     connectBackendWebSocket();
     setIsSessionActive(true);
     updateVadState('SETTING_UP');

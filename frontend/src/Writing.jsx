@@ -57,10 +57,9 @@ const WRITING_TEXT = {
     estimatedLevel: 'Estimated Level',
     rubricBreakdown: 'Rubric Performance',
     grammarSyntax: 'Grammar & Syntax',
-    spellingPunct: 'Spelling & Punctuation',
-    vocabularyVariety: 'Vocabulary Variety',
-    coherenceFlow: 'Coherence & Flow',
-    taskFulfillment: 'Task Fulfillment',
+    fluency: 'Fluency',
+    clarity: 'Clarity',
+    engagement: 'Engagement',
     tabIssues: 'Detected Issues',
     tabVocab: 'Vocabulary Upgrades',
     tabRewrite: 'Native AI Rewrite',
@@ -119,10 +118,9 @@ const WRITING_TEXT = {
     estimatedLevel: 'የተገመተ ደረጃ',
     rubricBreakdown: 'የመለኪያዎች አፈጻጸም',
     grammarSyntax: 'ሰዋስውና መዋቅር',
-    spellingPunct: 'የፊደል አጻጻፍና ሥርዓተ-ነጥብ',
-    vocabularyVariety: 'የቃላት ብልጽግና',
-    coherenceFlow: 'ተያያዥነትና ፍሰት',
-    taskFulfillment: 'የተልእኮ ምላሽ',
+    fluency: 'ቅልጥፍና',
+    clarity: 'ግልጽነት',
+    engagement: 'አሳታፊነት',
     tabIssues: 'የተገኙ ስህተቶች',
     tabVocab: 'የተሻሻሉ ቃላት',
     tabRewrite: 'የተስተካከለ ቅጂ',
@@ -665,7 +663,7 @@ export default function Writing({ student, amharic = false, onNavigateToPractice
                 </div>
               )}
 
-              {/* 5-Metric Breakdown */}
+              {/* Four-metric rubric breakdown */}
               <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-main)' }}>
                 {T.rubricBreakdown}
               </h4>
@@ -676,10 +674,9 @@ export default function Writing({ student, amharic = false, onNavigateToPractice
                   const feedback = typeof data === 'object' ? data.feedback : '';
                   const titleMap = {
                     grammar: T.grammarSyntax,
-                    spelling: T.spellingPunct,
-                    vocabulary: T.vocabularyVariety,
-                    coherence: T.coherenceFlow,
-                    taskRelevance: T.taskFulfillment
+                    fluency: T.fluency,
+                    clarity: T.clarity,
+                    engagement: T.engagement
                   };
 
                   return (
