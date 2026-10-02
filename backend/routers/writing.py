@@ -201,16 +201,17 @@ DEFAULT_WRITING_PROMPTS = [
 # --- Prompt System Setup for LLM Evaluator ---
 
 ASSESSMENT_SYSTEM_PROMPT = """You are an elite Cambridge/IELTS certified English writing assessor and CEFR examiner.
-Your task is to thoroughly assess the student's writing submission across standard CEFR criteria:
-1. Overall score (0-100) and estimated CEFR level (A1, A2, B1, B2, C1, C2).
-2. Grammar & Syntax: Tenses, verb agreements, word order, complex structures.
-3. Spelling & Punctuation: Typographical precision, capitalization, comma usage, apostrophes.
-4. Vocabulary & Lexical Diversity: Range, repetitive words, idiomatic expressions, precision.
-5. Coherence, Cohesion & Flow: Paragraphing, transition words, logical progression.
-6. Task Fulfillment: How well the response answers the prompt instructions and maintains appropriate tone.
+Assess the writing using exactly these four scored criteria, and no others:
+1. Grammar: grammatical accuracy, syntax, sentence construction, spelling, and punctuation.
+2. Fluency: natural flow, sentence rhythm and variety, and smooth connections between ideas.
+3. Clarity: how understandable, precise, and logically organized the ideas are.
+4. Engagement: how effectively the writing sustains interest and develops its ideas for the reader.
+Derive the overall score and estimated CEFR level (A1, A2, B1, B2, C1, C2) only from these four criteria.
 
 CRITICAL RULES:
 - Return ONLY valid JSON. No markdown backticks, no commentary outside the JSON.
+- The "metrics" object MUST contain exactly "grammar", "fluency", "clarity", and "engagement". Do not include or score any other metric.
+- Keep all feedback, strengths, and next steps focused on these four criteria. Do not assess task fulfillment, vocabulary range, or any other independent criterion.
 - Every detected issue MUST contain:
   - "type": "grammar" | "spelling" | "punctuation" | "word_choice" | "structure"
   - "original": the exact snippet from student text
@@ -224,13 +225,12 @@ JSON SCHEMA:
 {
   "overallScore": 82,
   "cefrLevel": "B2",
-  "feedbackSummary": "Clear, well-reasoned essay. Strong paragraph transitions with minor verb tense slips.",
+    "feedbackSummary": "Clear writing with strong flow and reader engagement, plus a few grammar issues to refine.",
   "metrics": {
-    "grammar": {"score": 80, "label": "Strong", "feedback": "Good sentence variety with slight tense inconsistencies."},
-    "spelling": {"score": 92, "label": "Excellent", "feedback": "Virtually flawless spelling."},
-    "vocabulary": {"score": 78, "label": "Good", "feedback": "Appropriate lexical choice; could benefit from more precise academic terms."},
-    "coherence": {"score": 85, "label": "Strong", "feedback": "Ideas flow smoothly with effective linking phrases."},
-    "taskRelevance": {"score": 88, "label": "Strong", "feedback": "Prompt objectives fully satisfied."}
+        "grammar": {"score": 80, "label": "Strong", "feedback": "Sentences are mostly accurate, with a few tense errors."},
+        "fluency": {"score": 85, "label": "Strong", "feedback": "Ideas flow naturally with varied sentence rhythm."},
+        "clarity": {"score": 88, "label": "Strong", "feedback": "The main ideas are easy to understand and follow."},
+        "engagement": {"score": 82, "label": "Strong", "feedback": "The writing develops its ideas in an interesting way."}
   },
   "issues": [
     {
@@ -312,11 +312,10 @@ def _heuristic_fallback_assessment(text: str, cefr_target: str = "B1") -> dict:
         "cefrLevel": cefr_target,
         "feedbackSummary": f"Your submission of {word_count} words demonstrates solid effort with clear expression of thought. Review the highlighted corrections to refine your accuracy.",
         "metrics": {
-            "grammar": {"score": max(55, base_score - 3), "label": "Good", "feedback": "Consistent sentence flow throughout."},
-            "spelling": {"score": max(60, 95 - len(issues) * 10), "label": "Strong", "feedback": "Accurate everyday orthography."},
-            "vocabulary": {"score": min(85, max(60, 65 + word_count // 10)), "label": "Good", "feedback": "Diverse functional vocabulary."},
-            "coherence": {"score": min(85, max(60, 70 + sentence_count * 2)), "label": "Good", "feedback": "Logical sequence between thoughts."},
-            "taskRelevance": {"score": min(90, max(70, base_score + 5)), "label": "Strong", "feedback": "Directly responds to writing prompt."}
+            "grammar": {"score": max(55, base_score - 3), "label": "Good", "feedback": "Sentence structures are mostly accurate."},
+            "fluency": {"score": min(90, max(55, 68 + min(sentence_count, 11) * 2)), "label": "Good", "feedback": "Sentences create a steady flow of ideas."},
+            "clarity": {"score": min(90, max(55, 65 + min(word_count // 12, 25))), "label": "Good", "feedback": "The main ideas are understandable and organized."},
+            "engagement": {"score": min(90, max(55, 60 + min(word_count // 10, 30))), "label": "Good", "feedback": "The writing gives the reader ideas to follow."}
         },
         "issues": issues,
         "vocabularyEnhancements": [
@@ -412,7 +411,7 @@ async def assess_writing(req: WritingAssessRequest, current_student: str = Depen
     reading_time = round(word_count / 180, 1)
 
     # --- Build a deterministic cache key from the exact submission content ---
-    cache_key_raw = f"{text}|{req.cefrLevel}|{req.promptId or ''}|{req.promptTitle or ''}"
+    cache_key_raw = f"writing-rubric-v1|{text}|{req.cefrLevel}|{req.promptId or ''}|{req.promptTitle or ''}"
     cache_hash = hashlib.sha256(cache_key_raw.encode("utf-8")).hexdigest()
 
     # --- Check Firestore cache first ---
