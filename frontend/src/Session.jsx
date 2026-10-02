@@ -29,7 +29,6 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const chatEndRef = useRef(null);
   const vadStateRef = useRef('IDLE');
   const conversationRef = useRef([]);
-  const initialPromptPendingRef = useRef(false);
   const isEndingRef = useRef(false);
   const [userTurnCount, setUserTurnCount] = useState(0);
   const userTurnCountRef = useRef(0);
@@ -56,6 +55,9 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const audioChunkBufferRef = useRef([]);
 
   const processingTimeoutRef = useRef(null);
+  const reconnectCountRef = useRef(0);
+  const isReconnectingRef = useRef(false);
+  const sessionStartedRef = useRef(false);
 
   useEffect(() => {
     conversationRef.current = conversation;
@@ -140,16 +142,20 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
 
     ws.onopen = () => {
-      // Send a keep‑alive ping every 30 seconds to avoid idle timeouts
+      // Successful (re-)connection - reset reconnect counters
+      reconnectCountRef.current = 0;
+      isReconnectingRef.current = false;
+
+      // Send a keep-alive ping every 30 seconds to avoid idle timeouts
       ws.pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, 30000);
 
-      // Send the initial prompt once for each newly started session.
-      if (initialPromptPendingRef.current) {
-        initialPromptPendingRef.current = false;
+      // Only send 'start' once per session (not on reconnects mid-session)
+      if (!sessionStartedRef.current && conversationRef.current.length === 0) {
+        sessionStartedRef.current = true;
         updateVadState('PROCESSING');
         ws.send(JSON.stringify({
           type: 'start',
@@ -167,35 +173,40 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     };
 
     ws.onclose = (event) => {
-      // Clear ping interval if set
       if (ws.pingInterval) clearInterval(ws.pingInterval);
 
-      // If the session is ending, do not attempt reconnect
-      if (isEndingRef.current) {
-        setSttError("Session ended. Connection closed.");
+      // Intentional close when session is ending — do nothing
+      if (isEndingRef.current) return;
+      // Normal close code (1000 / 1001) — server cleanly ended; no reconnect needed
+      if (event.code === 1000 || event.code === 1001) return;
+      // Already attempting a reconnect — don't stack up another one
+      if (isReconnectingRef.current) return;
+
+      const maxRetries = 3;
+      if (reconnectCountRef.current >= maxRetries) {
+        setSttError('Connection lost. Please refresh the page and try again.');
         updateVadState('ERROR');
+        isReconnectingRef.current = false;
         return;
       }
 
-      // Unexpected close – attempt reconnection with exponential backoff
-      const maxRetries = 5;
-      const baseDelay = 1000; // 1 second
+      isReconnectingRef.current = true;
+      reconnectCountRef.current += 1;
+      const delay = 1500 * reconnectCountRef.current;
 
-      const attemptReconnect = (retryCount) => {
-        if (retryCount > maxRetries) {
-          setSttError("Unable to maintain WebSocket connection. Please try again later.");
-          updateVadState('ERROR');
-          return;
-        }
-        const delay = baseDelay * Math.pow(2, retryCount);
-        setTimeout(() => {
-          console.log(`Reconnecting WebSocket attempt ${retryCount + 1}`);
+      // If we were mid-turn (PROCESSING), reset to LISTENING so user can re-speak
+      if (vadStateRef.current === 'PROCESSING') {
+        setSttError('Connection briefly dropped. Please repeat your last message.');
+        setTimeout(() => setSttError(null), 4000);
+        updateVadState('LISTENING');
+        startVoiceCapture();
+      }
+
+      setTimeout(() => {
+        if (!isEndingRef.current) {
           connectBackendWebSocket();
-        }, delay);
-      };
-
-      // Start first reconnection attempt
-      attemptReconnect(0);
+        }
+      }, delay);
     };
 
     ws.onmessage = (event) => {
@@ -225,11 +236,14 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         });
       }
       if (data.type === 'done') {
-        if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
-          // No audio was received (Google Translate TTS may have failed).
-          // Skip audio gracefully and proceed to the next turn.
-          handleTurnEnd();
-        }
+        // Give any in-flight audio message a tick to arrive before deciding
+        setTimeout(() => {
+          if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+            // No audio received or queued — skip straight to the next turn
+            handleTurnEnd();
+          }
+          // If audio IS queued or playing, the playNextAudio chain will call handleTurnEnd
+        }, 80);
       }
     };
   };
@@ -408,10 +422,12 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
   const startConversation = () => {
     if (isEnding || outcome) return;
-    initialPromptPendingRef.current = true;
-    // Reset user turn counter at the start of a new session
+    // Reset session tracking state
     setUserTurnCount(0);
     userTurnCountRef.current = 0;
+    reconnectCountRef.current = 0;
+    isReconnectingRef.current = false;
+    sessionStartedRef.current = false;
     connectBackendWebSocket();
     setIsSessionActive(true);
     updateVadState('SETTING_UP');
@@ -419,7 +435,18 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
   const handleSpeechEnd = (transcript) => {
     const trimmedTranscript = transcript.trim();
-    if (!trimmedTranscript || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!trimmedTranscript) return;
+
+    // Guard: if WebSocket isn't open, show a brief message and let user retry
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setSttError('Connection not ready — please wait a moment and try again.');
+      setTimeout(() => setSttError(null), 3000);
+      if (!isEndingRef.current) {
+        updateVadState('LISTENING');
+        startVoiceCapture();
+      }
+      return;
+    }
 
     // Increment user turn count
     const nextCount = userTurnCountRef.current + 1;
