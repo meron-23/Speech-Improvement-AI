@@ -218,7 +218,7 @@ function Dashboard({ student, sessions, lessons, dataLoading, onNewSession, onVi
 
       {/* Current Mission Banner */}
       {student.currentLesson && (
-        <div className="current-mission-banner" onClick={onNewSession}>
+        <div className="current-mission-banner" onClick={() => onNewSession()}>
           <div className="mission-banner-info">
             <span className="mission-banner-label">{T.activeMission}</span>
             <h3>{student.currentLesson.title}</h3>
