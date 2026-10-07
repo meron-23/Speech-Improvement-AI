@@ -301,26 +301,7 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
 
                 print(f"[CHAT_STREAM] Groq/Gemini response: {full_ai_text}")
                 await websocket.send_json({"type": "text", "text": full_ai_text})
-                
-                try:
-                    text_to_speak = re.sub(r'[\r\n]+', ' ', full_ai_text).strip()
-                    text_to_speak = re.sub(r'[*_#`]', '', text_to_speak).strip()
-                    chunks = [text_to_speak[i:i + MAX_CHUNK_SIZE] for i in range(0, len(text_to_speak), MAX_CHUNK_SIZE)]
-                    combined_audio = b""
-                    for idx, chunk in enumerate(chunks):
-                        if not chunk.strip():
-                            continue
-                        encoded_chunk = quote(chunk.strip())
-                        tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
-                        tts_resp = requests.get(tts_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
-                        if tts_resp.status_code == 200:
-                            combined_audio += tts_resp.content
-                    if combined_audio:
-                        audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
-                        await websocket.send_json({"type": "audio", "audio": audio_base64})
-                except Exception as tts_err:
-                    print("[CHAT_STREAM] Google TTS exception:", tts_err)
-
+                # Frontend uses browser SpeechSynthesis — no audio encoding needed here.
                 await websocket.send_json({"type": "done", "full_text": full_ai_text.strip()})
             except Exception as generation_err:
                 print(f"[CHAT_STREAM] Error during Groq generation: {generation_err}")
