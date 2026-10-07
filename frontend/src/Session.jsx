@@ -35,23 +35,19 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
   // Audio Playback Refs
   const wsRef = useRef(null);
+
+  // We use the browser's built-in SpeechSynthesis for zero-latency AI voice.
+  // audioQueueRef / isPlayingRef kept for API compatibility; no base64 audio used.
   const audioQueueRef = useRef([]);
   const isPlayingRef = useRef(false);
   const currentAudioRef = useRef(null);
+  const isSpeakingTTSRef = useRef(false);
 
-  // Deepgram Refs
-  const deepgramKeyRef = useRef(null);
-  const dgConnectionRef = useRef(null);
+  // Mic / VAD Refs
   const mediaRecorderRef = useRef(null);
   const microhponeStreamRef = useRef(null);
-  const transcriptBufferRef = useRef([]);
   const silenceTimerRef = useRef(null);
-  // Use English-only Deepgram model for connection stability.
-  // Non-English input is handled by the LLM system prompt (nudging the user to speak English).
-  const deepgramLanguageRef = useRef('en-US');
-  // Track reconnection attempts for Deepgram
-  const deepgramRetryCountRef = useRef(0);
-  // Buffer raw audio chunks during LISTENING to use as fallback STT for non-English speech
+  // Buffer raw audio chunks during LISTENING for STT upload
   const audioChunkBufferRef = useRef([]);
 
   const processingTimeoutRef = useRef(null);
@@ -127,6 +123,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   }
 
   function stopAudioPlayback() {
+    // Stop browser TTS if speaking
+    if (window.speechSynthesis && window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
+    isSpeakingTTSRef.current = false;
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -225,12 +226,6 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
       if (data.type === 'transcript') {
         return;
       }
-      if (data.audio) {
-        audioQueueRef.current.push(data.audio);
-        if (!isPlayingRef.current) {
-          playNextAudio();
-        }
-      }
       if (data.type === 'text' || data.text) {
         const aiText = data.text;
         if (!aiText) return;
@@ -250,41 +245,38 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         });
       }
       if (data.type === 'done') {
-        // Give any in-flight audio message a tick to arrive before deciding
-        setTimeout(() => {
-          if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
-            // No audio received or queued — skip straight to the next turn
+        // Speak the AI's full text via browser TTS (zero-latency, no network round-trip)
+        const aiText = data.full_text || '';
+        if (aiText && window.speechSynthesis) {
+          // Cancel any previous utterance
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(aiText);
+          utterance.lang = 'en-US';
+          utterance.rate = 0.95;
+          utterance.pitch = 1.05;
+          isSpeakingTTSRef.current = true;
+          updateVadState('AI_SPEAKING');
+          utterance.onend = () => {
+            isSpeakingTTSRef.current = false;
             handleTurnEnd();
-          }
-          // If audio IS queued or playing, the playNextAudio chain will call handleTurnEnd
-        }, 80);
+          };
+          utterance.onerror = () => {
+            isSpeakingTTSRef.current = false;
+            handleTurnEnd();
+          };
+          window.speechSynthesis.speak(utterance);
+        } else {
+          // No TTS available — go straight to next turn
+          handleTurnEnd();
+        }
       }
     };
   };
 
+  // playNextAudio kept as a no-op stub; audio is handled by browser SpeechSynthesis in onmessage.
   const playNextAudio = () => {
-    if (audioQueueRef.current.length === 0) {
-      isPlayingRef.current = false;
-      handleTurnEnd();
-      return;
-    }
-    isPlayingRef.current = true;
-    updateVadState('AI_SPEAKING');
-
-    const audioData = audioQueueRef.current.shift();
-    const audioUrl = `data:audio/mp3;base64,${audioData}`;
-    const audio = new Audio(audioUrl);
-    currentAudioRef.current = audio;
-
-    audio.onended = () => playNextAudio();
-    audio.onerror = () => {
-      console.error("Audio playback error event triggered");
-      playNextAudio();
-    };
-    audio.play().catch(err => {
-      console.error("Audio playback error:", err);
-      playNextAudio();
-    });
+    isPlayingRef.current = false;
+    handleTurnEnd();
   };
 
   const handleTurnEnd = () => {
@@ -366,7 +358,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         if (vadStateRef.current === 'SPEAKING' || vadStateRef.current === 'LISTENING') {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-          silenceTimerRef.current = setTimeout(() => {
+          silenceTimerRef.current = setTimeout(() => { // 500ms — tighter for live feel
             if (vadStateRef.current === 'SPEAKING') {
               const chunks = audioChunkBufferRef.current.slice();
               audioChunkBufferRef.current = [];
@@ -421,7 +413,7 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
               }
             }
             silenceTimerRef.current = null;
-          }, 800);
+          }, 500);
         }
       });
 
