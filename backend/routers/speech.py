@@ -2,14 +2,54 @@ import os
 import re
 import base64
 from urllib.parse import quote
+import uuid
 import requests
 from fastapi import APIRouter, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 import jwt
-from config import JWT_SECRET, GEMINI_API_KEY, GROQ_API_KEY, DEEPGRAM_API_KEY
+from config import JWT_SECRET, GEMINI_API_KEY, GROQ_API_KEY, DEEPGRAM_API_KEY, ADDIS_API_KEY
 from auth_utils import verify_student_token
 
 router = APIRouter(tags=["speech"])
+
+LATIN_AMHARIC_PATTERN = re.compile(
+    r'\b(selam|endemin|endeet|endet|algebanyem|algebangem|eshi|ishe|ante|anchi|betam|tiru|dehna|amesegnalehu|amesegnalew|yikirta|min|ayt|aydelem|ayhonim|man|ene|egna|ahun|kebad|kelela|konjo|gobez|ayzo|ayzoh|ayzosh|bado|chigir|yelem)\b',
+    re.IGNORECASE
+)
+
+def generate_addis_tts(text: str, voice_id: str = "am-simon") -> str:
+    """
+    Generate speech audio via Addis Assistant TTS API (Addis Voices 2).
+    Returns data URI string (e.g. data:audio/mpeg;base64,...) or empty string.
+    Voices:
+      - am-simon: Male Amharic voice
+      - am-hamen: Female Amharic voice
+    """
+    if not ADDIS_API_KEY:
+        return ""
+    try:
+        url = "https://api.addisassistant.com/api/v1/voice/generations"
+        headers = {
+            "x-api-key": ADDIS_API_KEY,
+            "content-type": "application/json"
+        }
+        payload = {
+            "text": text,
+            "voice_id": voice_id,
+            "language": "am",
+            "output_format": "mp3_44100",
+            "client_request_id": str(uuid.uuid4())
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=15)
+        if res.status_code == 201:
+            data = res.json().get("data", {})
+            return data.get("audio", "")
+        else:
+            print(f"[ADDIS_TTS] Error {res.status_code}: {res.text}")
+    except Exception as e:
+        print(f"[ADDIS_TTS] Exception: {e}")
+    return ""
+
 
 MAX_CHUNK_SIZE = 200
 
@@ -142,10 +182,24 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
 
 class TTSRequest(BaseModel):
     text: str
+    voice_gender: str = "male"
+    voice_id: str = None
 
 @router.post("/tts")
 async def tts(req: TTSRequest, current_student: str = Depends(verify_student_token)):
     text = req.text
+    target_voice = req.voice_id or ("am-hamen" if req.voice_gender == "female" else "am-simon")
+    contains_amharic = bool(re.search(r'[\u1200-\u137F\u1380-\u139F]', text))
+    if contains_amharic and ADDIS_API_KEY:
+        addis_audio = generate_addis_tts(text, voice_id=target_voice)
+        if addis_audio:
+            if "," in addis_audio:
+                audio_b64 = addis_audio.split(",", 1)[1]
+            else:
+                audio_b64 = addis_audio
+            return {"audio": audio_b64, "format": "mp3"}
+
+
     chunks = [text[i:i + MAX_CHUNK_SIZE] for i in range(0, len(text), MAX_CHUNK_SIZE)]
     combined_audio = b""
     
@@ -167,6 +221,7 @@ async def tts(req: TTSRequest, current_student: str = Depends(verify_student_tok
     except Exception as e:
         print("TTS Exception:", str(e))
         return {"audio": ""}
+
 
 @router.websocket("/chat_stream")
 async def chat_stream(websocket: WebSocket):
@@ -209,6 +264,15 @@ async def chat_stream(websocket: WebSocket):
             history = payload.get("history", [])
             cefrLevel = payload.get("cefrLevel", "B1")
             lesson = payload.get("lesson")
+            voice_gender = payload.get("voiceGender", "male")
+            target_voice_id = "am-hamen" if str(voice_gender).lower() == "female" else "am-simon"
+            
+            is_amharic = payload.get("isAmharic", False)
+            if transcript:
+                has_latin_amharic = bool(LATIN_AMHARIC_PATTERN.search(transcript))
+                has_geez_script = bool(re.search(r'[\u1200-\u137F\u1380-\u139F]', transcript))
+                if has_latin_amharic or has_geez_script:
+                    is_amharic = True
             
             system_prompt = f"You are a friendly English conversation partner for a {cefrLevel} student."
             if lesson:
@@ -242,8 +306,22 @@ ABSOLUTE RULES (never break these):
 - NEVER include stage directions, gestures, or actions such as *smiles*, *nods*, *laughs*, *sighs*, or any text wrapped in asterisks (*...*). Speak only in plain words.
 - Do NOT correct the student's grammar during the conversation; keep the flow going.
 - Ask one short follow-up question to keep the conversation moving.
+"""
 
-STRICT RULE: If the user's input is NOT in English (e.g., they speak in another language), do not answer their question or continue the topic. Instead, politely nudge them to try speaking in English. For example: "I'm sorry, I didn't quite understand. Could you try saying that in English?"
+            # If student spoke Amharic (in Fidel or Latin transliteration), override with a bilingual teaching response
+            if is_amharic:
+                system_prompt += """
+
+IMPORTANT — AMHARIC INPUT DETECTED:
+The student communicated in Amharic (either in Ge'ez Fidel or Latin transliteration / Amharish like 'selam', 'algebanyem', 'endeet neh', etc.).
+They understand Amharic but are building English speaking confidence.
+Your job is to act as a warm bilingual tutor:
+1. First, briefly acknowledge what they said in Amharic Fidel (1 short sentence in Amharic script, e.g. "ጥሩ ነው!", "እሺ!", "አልገባኝም አልክ? ችግር የለም!").
+2. Then show them clearly how to express that exact idea in English — give 1 or 2 natural phrases.
+3. End with a gentle English prompt encouraging them to try saying it (e.g. "Can you try saying that in English?").
+
+Format: [Amharic acknowledgment in Fidel]. In English, you could say: "[English phrase 1]" or "[English phrase 2]". [Gentle prompt to try in English].
+Keep the whole response under 3 sentences. Be warm and encouraging, not corrective.
 """
             messages = [{"role": "system", "content": system_prompt}]
             for msg in history:
@@ -258,7 +336,7 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
                 })
             
             try:
-                print(f"[CHAT_STREAM] Calling Groq with {len(messages)} messages...")
+                print(f"[CHAT_STREAM] Calling Groq with {len(messages)} messages (is_amharic={is_amharic}, voice={target_voice_id})...")
                 full_ai_text = None
                 for model_name in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
                     try:
@@ -301,8 +379,23 @@ STRICT RULE: If the user's input is NOT in English (e.g., they speak in another 
 
                 print(f"[CHAT_STREAM] Groq/Gemini response: {full_ai_text}")
                 await websocket.send_json({"type": "text", "text": full_ai_text})
-                # Frontend uses browser SpeechSynthesis — no audio encoding needed here.
-                await websocket.send_json({"type": "done", "full_text": full_ai_text.strip()})
+
+                # If the response contains Amharic characters or Amharic input was detected, synthesize with Addis AI TTS
+                addis_audio = ""
+                has_amharic_chars = bool(re.search(r'[\u1200-\u137F\u1380-\u139F]', full_ai_text))
+                if (is_amharic or has_amharic_chars) and ADDIS_API_KEY:
+                    try:
+                        print(f"[CHAT_STREAM] Generating Addis AI audio ({target_voice_id}) for bilingual/Amharic response...")
+                        addis_audio = generate_addis_tts(full_ai_text, voice_id=target_voice_id)
+                    except Exception as tts_err:
+                        print(f"[CHAT_STREAM] Addis TTS generation failed: {tts_err}")
+
+                done_payload = {"type": "done", "full_text": full_ai_text.strip()}
+                if addis_audio:
+                    done_payload["audio"] = addis_audio
+                await websocket.send_json(done_payload)
+
+
             except Exception as generation_err:
                 print(f"[CHAT_STREAM] Error during Groq generation: {generation_err}")
                 fallback_msg = "I'm having a bit of trouble connecting right now. Please try again!"

@@ -7,6 +7,7 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "speech_ai_student_secret_key_2026")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
+ADDIS_API_KEY = os.environ.get("ADDIS_API_KEY")
 
 allowed_origins_env = os.environ.get("ALLOWED_ORIGINS")
 if allowed_origins_env:
