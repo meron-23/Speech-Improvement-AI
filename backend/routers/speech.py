@@ -72,8 +72,9 @@ async def stt(audio: UploadFile = File(...), current_student: str = Depends(veri
         model = genai.GenerativeModel('gemini-3.1-flash-lite')
         response = model.generate_content([
             {"mime_type": audio.content_type or "audio/webm", "data": audio_bytes}, 
-            "Transcribe only clear human speech in this audio. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string. DO NOT converse with me. DO NOT ask for the audio file or a link. Never apologize or explain. If you cannot transcribe it, return an empty string."
+            "Transcribe human speech in this audio accurately. The speaker is an Ethiopian student who may speak in English or Amharic. If they speak Amharic, transcribe in Amharic Ge'ez script (ፊደል). If they speak English, transcribe in English. Return ONLY the exact words spoken. If there is no clear speech, background noise only, silence, music, or you are unsure, return an empty string. DO NOT converse with me. DO NOT ask for the audio file or a link. Never apologize or explain. If you cannot transcribe it, return an empty string."
         ], generation_config={"temperature": 0})
+
         
         if response.text:
             transcript = response.text.strip()
