@@ -15,6 +15,7 @@ function Settings({ student, onUpdateStudent }) {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [tutorVoiceGender, setTutorVoiceGender] = useState('male');
 
   // Load custom configurations on mount
   useEffect(() => {
@@ -22,10 +23,15 @@ function Settings({ student, onUpdateStudent }) {
     if (savedTimeout) {
       setSilenceTimeout(Number(savedTimeout) / 1000);
     }
+    const savedTutorGender = localStorage.getItem('tutor_voice_gender');
+    if (savedTutorGender) {
+      setTutorVoiceGender(savedTutorGender);
+    }
     const savedVoiceURI = localStorage.getItem('speech_tts_voice_uri');
     if (savedVoiceURI) {
       setSelectedVoiceURI(savedVoiceURI);
     }
+
 
     const loadVoices = () => {
       if ('speechSynthesis' in window) {
@@ -78,6 +84,8 @@ function Settings({ student, onUpdateStudent }) {
       // 2. Save Speech Pipeline configs locally in localStorage
       localStorage.setItem('speech_silence_timeout', String(silenceTimeout * 1000));
       localStorage.setItem('speech_tts_voice_uri', selectedVoiceURI);
+      localStorage.setItem('tutor_voice_gender', tutorVoiceGender);
+
 
       // 3. Notify App to update local state and storage
       if (onUpdateStudent) {
@@ -235,13 +243,79 @@ function Settings({ student, onUpdateStudent }) {
         {/* Section 3: Audio Pronunciation Preferences */}
         <div style={{ backgroundColor: 'white', borderRadius: '24px', padding: '2rem', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
           <h3 style={{ fontSize: '1.2rem', fontWeight: '800', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '0.75rem' }}>
-            <Globe size={20} color="#8b5cf6" /> Audio Pronunciation
+            <Globe size={20} color="#8b5cf6" /> Audio & Tutor Voice
           </h3>
+
+          {/* Tutor Persona Voice Selector */}
+          <div style={{ marginBottom: '1.75rem' }}>
+            <label style={{ fontSize: '0.85rem', fontWeight: '800', color: '#64748b', display: 'block', marginBottom: '8px' }}>
+              Conversation Tutor Persona & Voice
+            </label>
+            <p style={{ fontSize: '0.82rem', color: '#94a3b8', margin: '0 0 12px 0' }}>
+              Choose whether you prefer a male or female voice for English conversation and Amharic coaching.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setTutorVoiceGender('male');
+                  localStorage.setItem('tutor_voice_gender', 'male');
+                }}
+                style={{
+                  padding: '14px 18px',
+                  borderRadius: '16px',
+                  border: tutorVoiceGender === 'male' ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                  backgroundColor: tutorVoiceGender === 'male' ? '#eff6ff' : 'white',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  transition: 'all 0.2s ease',
+                  boxShadow: tutorVoiceGender === 'male' ? '0 4px 12px rgba(59, 130, 246, 0.15)' : 'none'
+                }}
+              >
+                <div style={{ fontSize: '2rem' }}>👨</div>
+                <div>
+                  <div style={{ fontWeight: '800', color: '#1e293b', fontSize: '0.95rem' }}>Simon (Male Tutor)</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Consistent male voice in English & Amharic</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTutorVoiceGender('female');
+                  localStorage.setItem('tutor_voice_gender', 'female');
+                }}
+                style={{
+                  padding: '14px 18px',
+                  borderRadius: '16px',
+                  border: tutorVoiceGender === 'female' ? '2px solid #ec4899' : '1px solid #e2e8f0',
+                  backgroundColor: tutorVoiceGender === 'female' ? '#fdf2f8' : 'white',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  transition: 'all 0.2s ease',
+                  boxShadow: tutorVoiceGender === 'female' ? '0 4px 12px rgba(236, 72, 153, 0.15)' : 'none'
+                }}
+              >
+                <div style={{ fontSize: '2rem' }}>👩</div>
+                <div>
+                  <div style={{ fontWeight: '800', color: '#1e293b', fontSize: '0.95rem' }}>Hamen (Female Tutor)</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Warm conversational female voice</div>
+                </div>
+              </button>
+            </div>
+          </div>
 
           <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
             {/* Voice Select */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minWidth: '200px' }}>
-              <label style={{ fontSize: '0.85rem', fontWeight: '800', color: '#64748b' }}>TTS Voice Accent</label>
+              <label style={{ fontSize: '0.85rem', fontWeight: '800', color: '#64748b' }}>Browser TTS Voice Override</label>
+
               <select 
                 value={selectedVoiceURI} 
                 onChange={(e) => setSelectedVoiceURI(e.target.value)}

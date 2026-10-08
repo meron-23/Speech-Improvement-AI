@@ -55,10 +55,21 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const isReconnectingRef = useRef(false);
   const initialGreetingReceivedRef = useRef(false);
 
+  const [tutorVoiceGender, setTutorVoiceGender] = useState(() => {
+    return localStorage.getItem('tutor_voice_gender') || 'male';
+  });
+  const tutorVoiceGenderRef = useRef(tutorVoiceGender);
+
+  useEffect(() => {
+    tutorVoiceGenderRef.current = tutorVoiceGender;
+    localStorage.setItem('tutor_voice_gender', tutorVoiceGender);
+  }, [tutorVoiceGender]);
+
   useEffect(() => {
     conversationRef.current = conversation;
     isEndingRef.current = isEnding;
   }, [conversation, isEnding]);
+
 
   useEffect(() => {
     setIsServerReady(true);
@@ -166,9 +177,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
           type: 'start',
           history: [],
           cefrLevel: student?.cefrLevel || 'B1',
-          lesson: activeLesson
+          lesson: activeLesson,
+          voiceGender: tutorVoiceGenderRef.current
         }));
       }
+
     };
 
     ws.onerror = (err) => {
@@ -245,17 +258,115 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         });
       }
       if (data.type === 'done') {
-        // Speak the AI's full text via browser TTS (zero-latency, no network round-trip)
         const aiText = data.full_text || '';
+
+        // If backend provided synthesized audio (e.g., Addis AI for Amharic / bilingual audio)
+        if (data.audio) {
+          if (window.speechSynthesis) window.speechSynthesis.cancel();
+          isSpeakingTTSRef.current = true;
+          updateVadState('AI_SPEAKING');
+          const audio = new Audio(data.audio);
+          currentAudioRef.current = audio;
+          audio.onended = () => {
+            isSpeakingTTSRef.current = false;
+            currentAudioRef.current = null;
+            handleTurnEnd();
+          };
+          audio.onerror = (err) => {
+            console.error('Audio playback error:', err);
+            isSpeakingTTSRef.current = false;
+            currentAudioRef.current = null;
+            handleTurnEnd();
+          };
+          audio.play().catch((err) => {
+            console.error('Audio play failed:', err);
+            isSpeakingTTSRef.current = false;
+            currentAudioRef.current = null;
+            handleTurnEnd();
+          });
+          return;
+        }
+
+        // Fallback: Speak the AI's full text via browser TTS (zero-latency, no network round-trip)
         if (aiText && window.speechSynthesis) {
-          // Cancel any previous utterance
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(aiText);
           utterance.lang = 'en-US';
           utterance.rate = 0.95;
-          utterance.pitch = 1.05;
+          utterance.pitch = 1.0;
           isSpeakingTTSRef.current = true;
           updateVadState('AI_SPEAKING');
+
+
+          // Pick consistent voice according to chosen tutor persona (Simon = Male, Hamen = Female)
+          const pickMaleVoice = () => {
+            const voices = window.speechSynthesis.getVoices();
+            // Ordered preference list: Windows → Chrome built-in → macOS → Linux
+            const preferred = [
+              'Microsoft Guy Online (Natural) - English (United States)',
+              'Microsoft David - English (United States)',
+              'Microsoft David Desktop - English (United States)',
+              'Google US English',       // Chrome on macOS/Linux (can be male)
+              'Daniel',                  // macOS male voice
+              'Fred',                    // macOS male
+              'Alex',                    // macOS male
+              'en-US-Standard-B',        // Google Cloud TTS male (if ever injected)
+            ];
+            for (const name of preferred) {
+              const v = voices.find(v => v.name === name);
+              if (v) return v;
+            }
+            // Fallback: any English male-sounding voice (heuristic by name)
+            const maleFallback = voices.find(
+              v => v.lang.startsWith('en') && /david|guy|fred|alex|daniel|james|john|mark|paul|tom|brian|eric|aaron|christopher|william|oliver/i.test(v.name)
+            );
+            if (maleFallback) return maleFallback;
+            // Last resort: first English voice available
+            return voices.find(v => v.lang.startsWith('en')) || null;
+          };
+
+          const pickFemaleVoice = () => {
+            const voices = window.speechSynthesis.getVoices();
+            const preferred = [
+              'Microsoft Jenny Online (Natural) - English (United States)',
+              'Microsoft Zira - English (United States)',
+              'Microsoft Zira Desktop - English (United States)',
+              'Google US English',
+              'Samantha',
+              'Victoria',
+              'Karen',
+              'en-US-Standard-C',
+              'en-US-Standard-E',
+            ];
+            for (const name of preferred) {
+              const v = voices.find(v => v.name === name);
+              if (v) return v;
+            }
+            const femaleFallback = voices.find(
+              v => v.lang.startsWith('en') && /jenny|zira|samantha|victoria|karen|susan|cathy|allison|fiona|linda|stephanie/i.test(v.name)
+            );
+            if (femaleFallback) return femaleFallback;
+            return voices.find(v => v.lang.startsWith('en')) || null;
+          };
+
+          const applyVoiceAndSpeak = () => {
+            const isFemale = tutorVoiceGenderRef.current === 'female';
+            const voice = isFemale ? pickFemaleVoice() : pickMaleVoice();
+            if (voice) utterance.voice = voice;
+            window.speechSynthesis.speak(utterance);
+          };
+
+
+          // Voices may not be loaded yet on first call — use onvoiceschanged if needed
+          if (window.speechSynthesis.getVoices().length > 0) {
+            applyVoiceAndSpeak();
+          } else {
+            window.speechSynthesis.onvoiceschanged = () => {
+              window.speechSynthesis.onvoiceschanged = null;
+              applyVoiceAndSpeak();
+            };
+          }
+
           utterance.onend = () => {
             isSpeakingTTSRef.current = false;
             handleTurnEnd();
@@ -264,7 +375,6 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
             isSpeakingTTSRef.current = false;
             handleTurnEnd();
           };
-          window.speechSynthesis.speak(utterance);
         } else {
           // No TTS available — go straight to next turn
           handleTurnEnd();
@@ -459,14 +569,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     userTurnCountRef.current = nextCount;
     setUserTurnCount(nextCount);
 
-    // Simple detection of non‑ASCII characters to infer non‑English speech
-    const nonEnglish = /[^\u0000-\u007F]/.test(trimmedTranscript);
-    if (nonEnglish) {
-      // Nudge the student to respond in English
-      setSttError(T.pleaseSpeakEnglish);
-    } else {
-      setSttError(null);
-    }
+    // Detect Amharic (both Ge'ez Fidel and Latin transliteration / Amharish)
+    const isFidel = /[\u1200-\u137F\u1380-\u139F]/.test(trimmedTranscript);
+    const isLatinAmharic = /\b(selam|endemin|endeet|endet|algebanyem|algebangem|eshi|ishe|ante|anchi|betam|tiru|dehna|amesegnalehu|amesegnalew|yikirta|min|ayt|aydelem|ayhonim|man|ene|egna|ahun|kebad|kelela|konjo|gobez|ayzo|ayzoh|ayzosh|bado|chigir|yelem)\b/i.test(trimmedTranscript);
+    const isAmharic = isFidel || isLatinAmharic;
+    setSttError(null); // clear any previous error; AI handles the nudge
 
     const userMessage = { role: 'user', text: trimmedTranscript };
     const nextConversation = [...conversationRef.current, userMessage];
@@ -475,16 +582,15 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
 
     updateVadState('PROCESSING');
 
-    // We intentionally leave the microphone and Deepgram connection OPEN 
-    // to avoid connection drops and rate limits. The incoming transcripts 
-    // will be ignored until vadState is set back to LISTENING.
-
     wsRef.current.send(JSON.stringify({
       history: nextConversation.slice(-5),
       cefrLevel: student.cefrLevel,
       lesson: activeLesson,
-      transcript: trimmedTranscript
+      transcript: trimmedTranscript,
+      isAmharic,  // tells the backend to respond with Amharic help + English suggestion
+      voiceGender: tutorVoiceGenderRef.current
     }));
+
   };
 
   const endSession = async () => {
@@ -903,13 +1009,38 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
           <h2 style={{ fontSize: '2rem', fontWeight: '800', marginBottom: '0.25rem' }}>{activeLesson?.title || T.practiceSession}</h2>
           <p style={{ color: 'var(--text-muted)' }}>{activeLesson?.objective || T.objective}</p>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '0.8rem', fontWeight: '700', color: userTurnCount >= MAX_TURNS ? '#ef4444' : 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            {T.turnLimit}: {userTurnCount} / {MAX_TURNS === 9999 ? '∞' : MAX_TURNS}
+        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setTutorVoiceGender(prev => prev === 'male' ? 'female' : 'male')}
+              title="Click to switch tutor voice"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '5px 12px',
+                borderRadius: '999px',
+                fontSize: '0.8rem',
+                fontWeight: '700',
+                border: tutorVoiceGender === 'female' ? '1px solid #f472b6' : '1px solid #93c5fd',
+                backgroundColor: tutorVoiceGender === 'female' ? '#fdf2f8' : '#eff6ff',
+                color: tutorVoiceGender === 'female' ? '#be185d' : '#1d4ed8',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <span>{tutorVoiceGender === 'female' ? '👩 Hamen' : '👨 Simon'}</span>
+              <span style={{ fontSize: '0.7rem', opacity: 0.75 }}>⇄</span>
+            </button>
+            <div style={{ fontSize: '0.8rem', fontWeight: '700', color: userTurnCount >= MAX_TURNS ? '#ef4444' : 'var(--text-muted)' }}>
+              {T.turnLimit}: {userTurnCount} / {MAX_TURNS === 9999 ? '∞' : MAX_TURNS}
+            </div>
           </div>
-          <button onClick={onViewDashboard} style={{ background: '#f1f5f9', color: '#64748b', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '700', cursor: 'pointer', fontSize: '0.9rem' }}>{T.exitSession}</button>
+          <button onClick={onViewDashboard} style={{ background: '#f1f5f9', color: '#64748b', padding: '6px 14px', borderRadius: '8px', border: 'none', fontWeight: '700', cursor: 'pointer', fontSize: '0.85rem' }}>{T.exitSession}</button>
         </div>
       </div>
+
 
       <div className="chat-container" style={{ position: 'relative', flex: 1, overflowY: 'auto', padding: '1rem 0', display: 'flex', flexDirection: 'column' }}>
         {!isSessionActive && conversation.length === 0 && (
