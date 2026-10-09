@@ -68,14 +68,16 @@ EDGE_VOICES = {
     "am_female": "am-ET-MekdesNeural",
 }
 
-async def get_edge_audio_bytes(text: str, voice: str) -> bytes:
+async def get_edge_audio_bytes(text: str, voice: str, timeout: float = 3.5) -> bytes:
     try:
-        communicate = edge_tts.Communicate(text, voice)
-        audio_data = bytearray()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.extend(chunk["data"])
-        return bytes(audio_data)
+        async def _stream():
+            communicate = edge_tts.Communicate(text, voice)
+            audio_data = bytearray()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_data.extend(chunk["data"])
+            return bytes(audio_data)
+        return await asyncio.wait_for(_stream(), timeout=timeout)
     except Exception as e:
         print(f"[EDGE_TTS] Failed for voice '{voice}': {e}")
         return b""
@@ -132,7 +134,7 @@ async def synthesize_tutor_speech(text: str, voice_gender: str = "male") -> str:
     - Pure English: native English Neural voice (Guy / Jenny)
     - Pure Amharic: native Amharic Neural voice (Ameha / Mekdes), Addis fallback
     - Bilingual (Amharic + English): split sentences, synthesize Amharic with Amharic voice
-      and English with English voice, then seamlessly stitch the MP3 streams together.
+      and English with English voice in parallel, then seamlessly stitch the MP3 streams together.
     Returns base64-encoded MP3 string.
     """
     if not text or not text.strip():
@@ -148,12 +150,12 @@ async def synthesize_tutor_speech(text: str, voice_gender: str = "male") -> str:
 
     if has_en and not has_am:
         # Pure English
-        audio = await get_edge_audio_bytes(text, en_voice)
+        audio = await get_edge_audio_bytes(text, en_voice, timeout=3.5)
         return base64.b64encode(audio).decode("utf-8") if audio else ""
 
     if has_am and not has_en:
         # Pure Amharic
-        audio = await get_edge_audio_bytes(text, am_voice)
+        audio = await get_edge_audio_bytes(text, am_voice, timeout=2.5)
         if audio:
             return base64.b64encode(audio).decode("utf-8")
         if ADDIS_API_KEY:
@@ -162,12 +164,12 @@ async def synthesize_tutor_speech(text: str, voice_gender: str = "male") -> str:
                 return addis_res.split(",", 1)[1] if "," in addis_res else addis_res
         return ""
 
-    # Bilingual: stitch segments
+    # Bilingual: synthesize all segments in parallel to minimize latency
     segments = split_by_language(text)
-    combined = bytearray()
-    for lang, seg_text in segments:
+
+    async def fetch_segment_audio(lang: str, seg_text: str) -> bytes:
         if lang == 'am':
-            seg_audio = await get_edge_audio_bytes(seg_text, am_voice)
+            seg_audio = await get_edge_audio_bytes(seg_text, am_voice, timeout=2.5)
             if not seg_audio and ADDIS_API_KEY:
                 addis_res = generate_addis_tts(seg_text, voice_id=addis_voice)
                 if addis_res:
@@ -176,12 +178,15 @@ async def synthesize_tutor_speech(text: str, voice_gender: str = "male") -> str:
                         seg_audio = base64.b64decode(b64)
                     except Exception:
                         seg_audio = b""
-            if seg_audio:
-                combined.extend(seg_audio)
+            return seg_audio
         else:
-            seg_audio = await get_edge_audio_bytes(seg_text, en_voice)
-            if seg_audio:
-                combined.extend(seg_audio)
+            return await get_edge_audio_bytes(seg_text, en_voice, timeout=3.5)
+
+    segment_audios = await asyncio.gather(*(fetch_segment_audio(l, t) for l, t in segments))
+    combined = bytearray()
+    for seg_audio in segment_audios:
+        if seg_audio:
+            combined.extend(seg_audio)
 
     return base64.b64encode(bytes(combined)).decode("utf-8") if combined else ""
 
