@@ -92,7 +92,10 @@ function Settings({ student, onUpdateStudent }) {
       });
       const data = await res.json();
       if (data.audio) {
-        const audio = new Audio(`data:audio/mp3;base64,${data.audio}`);
+        const audioSrc = data.audio.startsWith('data:')
+          ? data.audio
+          : `data:audio/mp3;base64,${data.audio}`;
+        const audio = new Audio(audioSrc);
         audio.onended = () => setTestingVoice(false);
         audio.onerror = () => setTestingVoice(false);
         audio.play().catch(() => setTestingVoice(false));
