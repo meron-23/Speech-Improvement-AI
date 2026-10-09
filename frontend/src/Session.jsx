@@ -265,7 +265,11 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
           if (window.speechSynthesis) window.speechSynthesis.cancel();
           isSpeakingTTSRef.current = true;
           updateVadState('AI_SPEAKING');
-          const audio = new Audio(data.audio);
+          const audioSrc = data.audio.startsWith('data:')
+            ? data.audio
+            : `data:audio/mp3;base64,${data.audio}`;
+          const audio = new Audio(audioSrc);
+
           currentAudioRef.current = audio;
           audio.onended = () => {
             isSpeakingTTSRef.current = false;
