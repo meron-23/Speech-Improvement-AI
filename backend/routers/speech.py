@@ -1,9 +1,10 @@
 import os
 import re
 import base64
-from urllib.parse import quote
+import asyncio
 import uuid
 import requests
+import edge_tts
 from fastapi import APIRouter, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 import jwt
@@ -48,6 +49,40 @@ def generate_addis_tts(text: str, voice_id: str = "am-simon") -> str:
             print(f"[ADDIS_TTS] Error {res.status_code}: {res.text}")
     except Exception as e:
         print(f"[ADDIS_TTS] Exception: {e}")
+    return ""
+
+
+# ──────────────────────────────────────────────────────────────
+# Microsoft Edge Neural TTS (edge-tts) — zero-cost, high quality
+# ──────────────────────────────────────────────────────────────
+# Voice mapping:
+#   English Male   → en-US-GuyNeural
+#   English Female → en-US-JennyNeural
+#   Amharic Male   → am-ET-AmehaNeural
+#   Amharic Female → am-ET-MekdesNeural
+
+EDGE_VOICES = {
+    "en_male":   "en-US-GuyNeural",
+    "en_female": "en-US-JennyNeural",
+    "am_male":   "am-ET-AmehaNeural",
+    "am_female": "am-ET-MekdesNeural",
+}
+
+async def generate_edge_tts(text: str, voice: str) -> str:
+    """
+    Synthesize text with Microsoft Edge Neural TTS.
+    Returns base64-encoded MP3 string, or empty string on failure.
+    """
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        audio_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data.extend(chunk["data"])
+        if audio_data:
+            return base64.b64encode(bytes(audio_data)).decode("utf-8")
+    except Exception as e:
+        print(f"[EDGE_TTS] Failed for voice '{voice}': {e}")
     return ""
 
 
@@ -189,39 +224,32 @@ class TTSRequest(BaseModel):
 @router.post("/tts")
 async def tts(req: TTSRequest, current_student: str = Depends(verify_student_token)):
     text = req.text
-    target_voice = req.voice_id or ("am-hamen" if req.voice_gender == "female" else "am-simon")
+    is_female = req.voice_gender == "female"
     contains_amharic = bool(re.search(r'[\u1200-\u137F\u1380-\u139F]', text))
-    if contains_amharic and ADDIS_API_KEY:
-        addis_audio = generate_addis_tts(text, voice_id=target_voice)
-        if addis_audio:
-            if "," in addis_audio:
-                audio_b64 = addis_audio.split(",", 1)[1]
-            else:
-                audio_b64 = addis_audio
+
+    # ── 1. Amharic / bilingual text: try Edge TTS Amharic voices first ──
+    if contains_amharic:
+        edge_voice = EDGE_VOICES["am_female"] if is_female else EDGE_VOICES["am_male"]
+        audio_b64 = await generate_edge_tts(text, edge_voice)
+        if audio_b64:
             return {"audio": audio_b64, "format": "mp3"}
+        # Fallback: Addis Assistant
+        addis_voice = "am-hamen" if is_female else "am-simon"
+        if ADDIS_API_KEY:
+            addis_audio = generate_addis_tts(text, voice_id=addis_voice)
+            if addis_audio:
+                audio_b64 = addis_audio.split(",", 1)[1] if "," in addis_audio else addis_audio
+                return {"audio": audio_b64, "format": "mp3"}
 
+    # ── 2. English text: Edge TTS neural voice ──
+    edge_voice = EDGE_VOICES["en_female"] if is_female else EDGE_VOICES["en_male"]
+    audio_b64 = await generate_edge_tts(text, edge_voice)
+    if audio_b64:
+        return {"audio": audio_b64, "format": "mp3"}
 
-    chunks = [text[i:i + MAX_CHUNK_SIZE] for i in range(0, len(text), MAX_CHUNK_SIZE)]
-    combined_audio = b""
-    
-    try:
-        for chunk in chunks:
-            encoded_chunk = quote(chunk)
-            url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded_chunk}&tl=en&client=tw-ob"
-            response = requests.get(url)
-            if response.status_code == 200:
-                combined_audio += response.content
-            else:
-                print(f"Google TTS Error for chunk: {response.text}")
-        
-        if combined_audio:
-            audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
-            return {"audio": audio_base64, "format": "mp3"}
-        else:
-            return {"audio": ""}
-    except Exception as e:
-        print("TTS Exception:", str(e))
-        return {"audio": ""}
+    # ── 3. Total fallback: empty (browser speechSynthesis will handle it) ──
+    print("[TTS] All synthesis paths failed, returning empty.")
+    return {"audio": ""}
 
 
 @router.websocket("/chat_stream")
@@ -381,19 +409,32 @@ Keep the whole response under 3 sentences. Be warm and encouraging, not correcti
                 print(f"[CHAT_STREAM] Groq/Gemini response: {full_ai_text}")
                 await websocket.send_json({"type": "text", "text": full_ai_text})
 
-                # If the response contains Amharic characters or Amharic input was detected, synthesize with Addis AI TTS
-                addis_audio = ""
+                # ── Synthesize audio for every turn with Edge TTS ──
+                is_female_voice = str(voice_gender).lower() == "female"
                 has_amharic_chars = bool(re.search(r'[\u1200-\u137F\u1380-\u139F]', full_ai_text))
-                if (is_amharic or has_amharic_chars) and ADDIS_API_KEY:
-                    try:
-                        print(f"[CHAT_STREAM] Generating Addis AI audio ({target_voice_id}) for bilingual/Amharic response...")
-                        addis_audio = generate_addis_tts(full_ai_text, voice_id=target_voice_id)
-                    except Exception as tts_err:
-                        print(f"[CHAT_STREAM] Addis TTS generation failed: {tts_err}")
+                turn_audio = ""
+
+                if is_amharic or has_amharic_chars:
+                    # Bilingual / Amharic response → use Edge Amharic voice
+                    am_voice = EDGE_VOICES["am_female"] if is_female_voice else EDGE_VOICES["am_male"]
+                    print(f"[CHAT_STREAM] Edge TTS Amharic ({am_voice})...")
+                    turn_audio = await generate_edge_tts(full_ai_text, am_voice)
+                    # Fallback: Addis Assistant
+                    if not turn_audio and ADDIS_API_KEY:
+                        print(f"[CHAT_STREAM] Falling back to Addis AI ({target_voice_id})...")
+                        try:
+                            turn_audio = generate_addis_tts(full_ai_text, voice_id=target_voice_id)
+                        except Exception as tts_err:
+                            print(f"[CHAT_STREAM] Addis TTS failed: {tts_err}")
+                else:
+                    # English response → use Edge English neural voice
+                    en_voice = EDGE_VOICES["en_female"] if is_female_voice else EDGE_VOICES["en_male"]
+                    print(f"[CHAT_STREAM] Edge TTS English ({en_voice})...")
+                    turn_audio = await generate_edge_tts(full_ai_text, en_voice)
 
                 done_payload = {"type": "done", "full_text": full_ai_text.strip()}
-                if addis_audio:
-                    done_payload["audio"] = addis_audio
+                if turn_audio:
+                    done_payload["audio"] = turn_audio
                 await websocket.send_json(done_payload)
 
 

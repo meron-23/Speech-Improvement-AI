@@ -8,9 +8,7 @@ import {
 function Settings({ student, onUpdateStudent }) {
   const [name, setName] = useState(student.name || '');
   const [cefrLevel, setCefrLevel] = useState(student.cefrLevel || 'A1');
-  const [silenceTimeout, setSilenceTimeout] = useState(2.5); // Default to 2.5 seconds
-  const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
-  const [voicesList, setVoicesList] = useState([]);
+  const [silenceTimeout, setSilenceTimeout] = useState(2.5);
 
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -26,31 +24,6 @@ function Settings({ student, onUpdateStudent }) {
     const savedTutorGender = localStorage.getItem('tutor_voice_gender');
     if (savedTutorGender) {
       setTutorVoiceGender(savedTutorGender);
-    }
-    const savedVoiceURI = localStorage.getItem('speech_tts_voice_uri');
-    if (savedVoiceURI) {
-      setSelectedVoiceURI(savedVoiceURI);
-    }
-
-
-    const loadVoices = () => {
-      if ('speechSynthesis' in window) {
-        const list = window.speechSynthesis.getVoices();
-        // Filter English voices
-        const filtered = list.filter(v => v.lang.toLowerCase().startsWith('en'));
-        const activeList = filtered.length > 0 ? filtered : list;
-        setVoicesList(activeList);
-        
-        // Auto select first voice if none saved
-        if (!savedVoiceURI && activeList.length > 0) {
-          setSelectedVoiceURI(activeList[0].voiceURI);
-        }
-      }
-    };
-
-    loadVoices();
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.onvoiceschanged = loadVoices;
     }
   }, []);
 
@@ -83,7 +56,6 @@ function Settings({ student, onUpdateStudent }) {
       
       // 2. Save Speech Pipeline configs locally in localStorage
       localStorage.setItem('speech_silence_timeout', String(silenceTimeout * 1000));
-      localStorage.setItem('speech_tts_voice_uri', selectedVoiceURI);
       localStorage.setItem('tutor_voice_gender', tutorVoiceGender);
 
 
@@ -103,23 +75,33 @@ function Settings({ student, onUpdateStudent }) {
     }
   };
 
-  const handlePlayVoiceTest = () => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance("Welcome to your interactive speaking dashboard. Let's practice together.");
-      utterance.rate = 0.9;
-      
-      const voices = window.speechSynthesis.getVoices();
-      const matchedVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
-      
-      if (matchedVoice) {
-        utterance.voice = matchedVoice;
-        utterance.lang = matchedVoice.lang;
+  const [testingVoice, setTestingVoice] = useState(false);
+
+  const handlePlayVoiceTest = async () => {
+    if (testingVoice) return;
+    setTestingVoice(true);
+    const authHeader = student?.token ? { 'Authorization': `Bearer ${student.token}` } : {};
+    try {
+      const res = await fetch(`${API_BASE_URL}/speech/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify({
+          text: "Welcome! I'm your AI English tutor. Let's practice speaking together.",
+          voice_gender: tutorVoiceGender
+        })
+      });
+      const data = await res.json();
+      if (data.audio) {
+        const audio = new Audio(`data:audio/mp3;base64,${data.audio}`);
+        audio.onended = () => setTestingVoice(false);
+        audio.onerror = () => setTestingVoice(false);
+        audio.play().catch(() => setTestingVoice(false));
+      } else {
+        setTestingVoice(false);
       }
-      
-      window.speechSynthesis.speak(utterance);
-    } else {
-      alert("Your browser does not support Speech Synthesis.");
+    } catch (err) {
+      console.error('Voice test failed:', err);
+      setTestingVoice(false);
     }
   };
 
@@ -278,7 +260,7 @@ function Settings({ student, onUpdateStudent }) {
                 <div style={{ fontSize: '2rem' }}>👨</div>
                 <div>
                   <div style={{ fontWeight: '800', color: '#1e293b', fontSize: '0.95rem' }}>Simon (Male Tutor)</div>
-                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Consistent male voice in English & Amharic</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Microsoft Edge · Guy (English) · Ameha (Amharic)</div>
                 </div>
               </button>
 
@@ -305,63 +287,45 @@ function Settings({ student, onUpdateStudent }) {
                 <div style={{ fontSize: '2rem' }}>👩</div>
                 <div>
                   <div style={{ fontWeight: '800', color: '#1e293b', fontSize: '0.95rem' }}>Hamen (Female Tutor)</div>
-                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Warm conversational female voice</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Microsoft Edge · Jenny (English) · Mekdes (Amharic)</div>
                 </div>
               </button>
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            {/* Voice Select */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minWidth: '200px' }}>
-              <label style={{ fontSize: '0.85rem', fontWeight: '800', color: '#64748b' }}>Browser TTS Voice Override</label>
-
-              <select 
-                value={selectedVoiceURI} 
-                onChange={(e) => setSelectedVoiceURI(e.target.value)}
-                style={{ 
-                  padding: '12px 16px', 
-                  borderRadius: '12px', 
-                  border: '1px solid #cbd5e1', 
-                  fontSize: '0.95rem',
-                  outline: 'none',
-                  color: '#334155',
-                  backgroundColor: '#f8fafc'
-                }}
-              >
-                {voicesList.length === 0 ? (
-                  <option value="">No voices detected</option>
-                ) : (
-                  voicesList.map((voice, idx) => (
-                    <option key={idx} value={voice.voiceURI}>
-                      {voice.name} ({voice.lang})
-                    </option>
-                  ))
-                )}
-              </select>
+          {/* Voice info badge + test button */}
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: '8px',
+              padding: '10px 16px', borderRadius: '12px',
+              backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0',
+              fontSize: '0.82rem', color: '#15803d', fontWeight: '600'
+            }}>
+              <Volume2 size={14} />
+              Active voice: Microsoft Edge Neural &mdash;&nbsp;
+              {tutorVoiceGender === 'female' ? 'Jenny (EN) · Mekdes (AM)' : 'Guy (EN) · Ameha (AM)'}
             </div>
-
-            {/* Test Voice Button */}
-            <button 
-              type="button" 
+            <button
+              type="button"
               onClick={handlePlayVoiceTest}
+              disabled={testingVoice}
               style={{
-                padding: '12px 24px',
+                padding: '10px 20px',
                 borderRadius: '12px',
                 border: '1px solid #cbd5e1',
-                backgroundColor: 'white',
-                color: '#475569',
+                backgroundColor: testingVoice ? '#f1f5f9' : 'white',
+                color: testingVoice ? '#94a3b8' : '#475569',
                 fontWeight: '700',
                 fontSize: '0.9rem',
-                cursor: 'pointer',
+                cursor: testingVoice ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '8px',
-                height: '46px',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+                boxShadow: '0 2px 4px rgba(0,0,0,0.04)'
               }}
             >
-              <Volume2 size={16} /> Test Accent Audio
+              <Volume2 size={15} />
+              {testingVoice ? 'Playing…' : 'Preview Voice'}
             </button>
           </div>
         </div>
