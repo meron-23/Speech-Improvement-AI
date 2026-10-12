@@ -11,4 +11,5 @@ groq
 PyJWT==2.8.0
 passlib[bcrypt]==1.7.4
 edge-tts>=7.2.8
+gtts>=2.5.1
 
