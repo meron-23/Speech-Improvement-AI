@@ -3,8 +3,10 @@ import re
 import base64
 import asyncio
 import uuid
+import io
 import requests
 import edge_tts
+from gtts import gTTS
 from fastapi import APIRouter, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 import jwt
@@ -82,6 +84,23 @@ async def get_edge_audio_bytes(text: str, voice: str, timeout: float = 3.5) -> b
         print(f"[EDGE_TTS] Failed for voice '{voice}': {e}")
         return b""
 
+def generate_gtts_english(text: str) -> bytes:
+    """
+    Fallback English TTS using Google Translate TTS (gTTS).
+    Returns MP3 bytes, or empty bytes on failure.
+    """
+    try:
+        buf = io.BytesIO()
+        tts = gTTS(text=text, lang='en', slow=False)
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        audio_bytes = buf.read()
+        print(f"[GTTS] Fallback synthesis succeeded ({len(audio_bytes)} bytes)")
+        return audio_bytes
+    except Exception as e:
+        print(f"[GTTS] Fallback failed: {e}")
+        return b""
+
 async def generate_edge_tts(text: str, voice: str) -> str:
     """
     Synthesize text with Microsoft Edge Neural TTS.
@@ -149,8 +168,11 @@ async def synthesize_tutor_speech(text: str, voice_gender: str = "male") -> str:
     has_en = bool(re.search(r'[a-zA-Z]', text))
 
     if has_en and not has_am:
-        # Pure English
+        # Pure English — try edge-tts, fall back to gTTS
         audio = await get_edge_audio_bytes(text, en_voice, timeout=3.5)
+        if not audio:
+            print("[TTS] edge-tts failed for English, falling back to gTTS")
+            audio = await asyncio.get_event_loop().run_in_executor(None, generate_gtts_english, text)
         return base64.b64encode(audio).decode("utf-8") if audio else ""
 
     if has_am and not has_en:
@@ -180,7 +202,12 @@ async def synthesize_tutor_speech(text: str, voice_gender: str = "male") -> str:
                         seg_audio = b""
             return seg_audio
         else:
-            return await get_edge_audio_bytes(seg_text, en_voice, timeout=3.5)
+            # English segment — try edge-tts, fall back to gTTS
+            seg_audio = await get_edge_audio_bytes(seg_text, en_voice, timeout=3.5)
+            if not seg_audio:
+                print("[TTS] edge-tts failed for English segment, falling back to gTTS")
+                seg_audio = await asyncio.get_event_loop().run_in_executor(None, generate_gtts_english, seg_text)
+            return seg_audio
 
     segment_audios = await asyncio.gather(*(fetch_segment_audio(l, t) for l, t in segments))
     combined = bytearray()
