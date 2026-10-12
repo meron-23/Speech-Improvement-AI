@@ -40,7 +40,8 @@ export const AM = {
   languageAm:        'አማ',
   // Session result strings
   canAdvance:        'ወደ ቀጣይ ትምህርት ማለፍ ይቻላል',
-  passRequirement:   'ለማለፍ ቢያንስ 60% ያስፈልጋል',
+  passRequirement:   (threshold = 60, level = '') => `${level ? level + ' ' : ''}ለማለፍ ቢያንስ ${threshold}% ያስፈልጋል`,
+  turnsRequirement:  (minTurns = 4, userTurns = 0) => `ቢያንስ ${minTurns} ዙሮች ያስፈልጋሉ (የተጠናቀቁ: ${userTurns})`,
   summary:           'ያጠናቀቁት መልሶች ላይ የተመሰረተ ዳሰሳ ይኸው ነው።',
   niceResponse:      'ጥሩ ምላሽ።',
   tipGrammar:        'ሙሉ ዓረፍተ ነገር ይጠቀሙ፡ ርዕሰ ጉዳይ + ግስ + ነገር።',
@@ -143,7 +144,8 @@ export const EN = {
   languageAm:        'EN',
   // Session result strings
   canAdvance:        'You can advance to the next lesson',
-  passRequirement:   'A score of 60% or above is required to pass',
+  passRequirement:   (threshold = 60, level = '') => `A score of ${threshold}% or above is required to pass${level ? ' ' + level : ''}`,
+  turnsRequirement:  (minTurns = 4, userTurns = 0) => `Minimum ${minTurns} turns required (Completed: ${userTurns})`,
   summary:           'Here is your assessment summary based on the answers you completed.',
   niceResponse:      'Nice clear response.',
   tipGrammar:        'Use full basic patterns: subject + verb + object.',

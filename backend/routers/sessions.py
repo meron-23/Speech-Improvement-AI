@@ -26,6 +26,79 @@ class FeedbackRequest(BaseModel):
     cefrLevel: str = "B1"
     lesson: dict = None
 
+CEFR_PROGRESSION_CONFIG = {
+    "A1": {
+        "min_score": 60,
+        "min_turns": 4,
+        "name": "Beginner",
+        "guidance": (
+            "- A1 Criteria: Focus on basic communication and attempt. Short phrases or simple clauses are acceptable. "
+            "Reward effort and basic understanding; do not heavily penalize minor grammar or preposition slips."
+        ),
+        "grammar_rule": "- Grammar score 1 when understandable even with minor slips; 0.5 when meaning is clear but noticeably flawed; 0 when unintelligible.",
+        "accuracy_rule": "- Accuracy score 1 when answer attempts the question or concept; 0.5 when partially related; 0 when blank or unrelated."
+    },
+    "A2": {
+        "min_score": 65,
+        "min_turns": 4,
+        "name": "Elementary",
+        "guidance": (
+            "- A2 Criteria: Expect simple complete sentences with basic subject-verb agreement and past/present tense. "
+            "Answers should be at least 3-5 words and respond directly to the prompt."
+        ),
+        "grammar_rule": "- Grammar score 1 for mostly correct simple sentences; 0.5 for noticeable tense or agreement errors; 0 for incoherent grammar.",
+        "accuracy_rule": "- Accuracy score 1 when answering the prompt directly; 0.5 when vague, incomplete, or only partly responsive; 0 when off-topic."
+    },
+    "B1": {
+        "min_score": 70,
+        "min_turns": 5,
+        "name": "Intermediate",
+        "guidance": (
+            "- B1 Criteria: Expect connected discourse using conjunctions (because, but, so, although). "
+            "Do NOT award full credit for 1-2 word answers. Students must show conversational contribution."
+        ),
+        "grammar_rule": "- Grammar score 1 for good control of standard structures with connector words; 0.5 for fragmented sentences or repetitive errors; 0 for broken grammar.",
+        "accuracy_rule": "- Accuracy score 1 for clear, relevant responses with some detail; 0.5 for superficial or overly brief answers; 0 for evasive or unrelated answers."
+    },
+    "B2": {
+        "min_score": 75,
+        "min_turns": 5,
+        "name": "Upper-Intermediate",
+        "guidance": (
+            "- B2 Criteria: Expect natural conversational flow, varied vocabulary, and clear explanations or opinions. "
+            "Expect well-formed multi-clause sentences. Deduct points for repetitive elementary vocabulary."
+        ),
+        "grammar_rule": "- Grammar score 1 for fluent, accurate complex sentences with only minor slips; 0.5 if limited to elementary grammar; 0 for frequent major errors.",
+        "accuracy_rule": "- Accuracy score 1 when thoughts are fully articulated with reasoning; 0.5 if lacking elaboration or detail; 0 for weak/off-topic response."
+    },
+    "C1": {
+        "min_score": 80,
+        "min_turns": 6,
+        "name": "Advanced",
+        "guidance": (
+            "- C1 Criteria: Expect high fluency, broad lexical range, idiomatic expressions, and subtle nuance. "
+            "High academic/professional standard: answers must be articulate, well-developed, and precise. Deduct points for repetitive or overly basic English."
+        ),
+        "grammar_rule": "- Grammar score 1 for consistently accurate, flexible, and sophisticated grammar; 0.5 if lacking complexity or showing basic slips; 0 for multiple errors.",
+        "accuracy_rule": "- Accuracy score 1 for insightful, nuanced, and detailed responses; 0.5 for generic, brief, or simplistic answers; 0 for inadequate responses."
+    },
+    "C2": {
+        "min_score": 85,
+        "min_turns": 7,
+        "name": "Mastery",
+        "guidance": (
+            "- C2 Criteria: Near-native precision, effortless natural phrasing, stylistic appropriateness, and complete fluency. "
+            "Mastery standard: virtually no grammatical or situational lapses."
+        ),
+        "grammar_rule": "- Grammar score 1 for near-native precision and effortless syntactic variety; 0.5 for noticeable non-native awkwardness; 0 for grammatical errors.",
+        "accuracy_rule": "- Accuracy score 1 for compelling, precise, and completely appropriate responses; 0.5 if clumsy or superficial; 0 if inadequate."
+    },
+}
+
+def get_cefr_progression_config(level: str) -> dict:
+    lvl = (level or "A1").upper().strip()
+    return CEFR_PROGRESSION_CONFIG.get(lvl, CEFR_PROGRESSION_CONFIG["A1"])
+
 def _matches_objective(conversation: list, objective: str) -> bool:
     if not objective:
         return False
@@ -142,14 +215,19 @@ async def save_session(req: SessionSaveRequest, current_student: str = Depends(v
     next_lesson = None
     level_complete = False
     
+    cefr_cfg = get_cefr_progression_config(req.cefrLevel)
+    min_turns = cefr_cfg["min_turns"]
+    min_score = cefr_cfg["min_score"]
+    user_turns = len([msg for msg in req.conversation if msg.get('role') == 'user'])
+    turn_target_met = user_turns >= min_turns
+
     if req.lessonId:
         lesson_doc = db.collection("curriculum").document(req.lessonId).get()
         if lesson_doc.exists:
             lesson_data = lesson_doc.to_dict()
             objective = lesson_data.get("objective")
             
-            user_turns = len([msg for msg in req.conversation if msg['role'] == 'user'])
-            if user_turns < 3:
+            if not turn_target_met:
                 passed = False
             elif GROQ_API_KEY:
                 try:
@@ -157,18 +235,19 @@ async def save_session(req: SessionSaveRequest, current_student: str = Depends(v
                     groq_client = Groq(api_key=GROQ_API_KEY)
                     
                     transcript = "\n".join([f"{msg['role']}: {msg['text']}" for msg in req.conversation])
-                    eval_prompt = f"""You are a supportive language instructor. Review this English learning conversation and decide whether the student achieved the stated lesson objective.
-Student Level: {req.cefrLevel}
-Objective: {objective}
+                    eval_prompt = f"""You are a supportive language instructor evaluating whether the student achieved the stated lesson objective.
+Student CEFR Level: {req.cefrLevel} ({cefr_cfg['name']})
+Minimum Required Turns: {min_turns} (Student completed: {user_turns})
+Lesson Objective: {objective}
 
 Conversation:
 {transcript}
 
-Assessment guidance:
-1. For A1/A2, accept short or partially formed sentences as long as the student clearly attempts the objective in English.
-2. Reward understandable responses and correct intent, not perfect grammar.
-3. For B1/B2, focus on whether the student uses clear, relevant English to fulfill the objective.
-4. Only answer NO when the response is unrelated, not in English, or does not satisfy the objective.
+Assessment guidance for Level {req.cefrLevel}:
+{cefr_cfg['guidance']}
+1. Check if the student met the conversational depth and demonstrated the target skills for {req.cefrLevel}.
+2. Only answer YES if the student reasonably fulfilled the objective according to {req.cefrLevel} expectations.
+3. Answer NO if responses are inadequate, off-topic, not in English, or fall significantly below {req.cefrLevel} requirements.
 
 Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                     
@@ -182,10 +261,10 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
                         passed = True
                 except Exception as e:
                     print(f"Evaluation error: {e}")
-                    if user_turns >= 4 and _matches_objective(req.conversation, objective):
+                    if turn_target_met and _matches_objective(req.conversation, objective):
                         passed = True
             else:
-                if user_turns >= 4 and _matches_objective(req.conversation, objective):
+                if turn_target_met and _matches_objective(req.conversation, objective):
                     passed = True
 
     grammar_percent = None
@@ -228,7 +307,7 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
     else:
         overall_score = 0.0
 
-    if overall_score < 60:
+    if overall_score < min_score or not turn_target_met:
         passed = False
 
     if passed:
@@ -258,6 +337,11 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
     session_data = req.model_dump()
     session_data["passed"] = passed
     session_data["overallScore"] = overall_score
+    session_data["passThreshold"] = min_score
+    session_data["minTurns"] = min_turns
+    session_data["userTurns"] = user_turns
+    session_data["turnTargetMet"] = turn_target_met
+
     doc_ref = db.collection("sessions").document()
     doc_ref.set(session_data)
     
@@ -270,7 +354,12 @@ Answer ONLY with 'YES' or 'NO'. Do not provide any other text."""
         "id": doc_ref.id, 
         "passed": passed, 
         "nextLesson": next_lesson,
-        "levelComplete": level_complete
+        "levelComplete": level_complete,
+        "passThreshold": min_score,
+        "minTurns": min_turns,
+        "userTurns": user_turns,
+        "turnTargetMet": turn_target_met,
+        "overallScore": overall_score
     }
 
 @router.post("/feedback")
@@ -295,8 +384,12 @@ async def generate_feedback(req: FeedbackRequest, current_student: str = Depends
         user_answer_count = answer_number
         lesson_objective = req.lesson.get("objective") if req.lesson else "General English speaking practice"
         
-        prompt = f"""Analyze this English assessment conversation for a {req.cefrLevel} learner.
+        cefr_cfg = get_cefr_progression_config(req.cefrLevel)
+        prompt = f"""Analyze this English assessment conversation for a {req.cefrLevel} ({cefr_cfg['name']}) learner.
 Lesson objective: {lesson_objective}
+
+LEVEL-SPECIFIC CEFR CRITERIA FOR {req.cefrLevel}:
+{cefr_cfg['guidance']}
 
 Return ONLY valid JSON. Do not include Markdown, comments, or prose outside the JSON.
 
@@ -305,15 +398,10 @@ For Grammar and Accuracy, return exactly {user_answer_count} review objects in t
 Score each answer with "score": 0, 0.5, or 1.
 Do not calculate percentages. The app will calculate each percentage from the average answer score.
 
-Scoring rules:
-- Be fair to spoken beginner/intermediate English. Ignore capitalization and punctuation.
-- Grammar score 1 when the answer is understandable and mostly grammatical, even if it is short or has minor errors.
-- Grammar score 0.5 when the meaning is clear but there is a noticeable grammar issue.
-- Grammar score 0 only when grammar makes the answer hard to understand.
-- Accuracy score 1 when the answer reasonably responds to the coach or moves the conversation forward.
-- Accuracy score 0.5 when the answer is related or understandable but incomplete, awkward, or only partly responsive.
-- Accuracy score 0 only when the answer is unrelated, empty, or impossible to connect to the conversation.
-- Do not mark an answer wrong just because it is informal, brief, or not the best possible response.
+Scoring rules for {req.cefrLevel}:
+- Ignore capitalization and punctuation.
+{cefr_cfg['grammar_rule']}
+{cefr_cfg['accuracy_rule']}
 
 CRITICAL feedback rules for "issue" and "suggestion" fields:
 - When score = 1: set "issue" to "" and "suggestion" to "".

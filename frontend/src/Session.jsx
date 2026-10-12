@@ -19,6 +19,18 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
   const [selectedCefr, setSelectedCefr] = useState(null);
   const activeLesson = customLesson || student.currentLesson;
 
+  const CEFR_CONFIG = {
+    A1: { passThreshold: 60, minTurns: 4, label: 'Beginner' },
+    A2: { passThreshold: 65, minTurns: 4, label: 'Elementary' },
+    B1: { passThreshold: 70, minTurns: 5, label: 'Intermediate' },
+    B2: { passThreshold: 75, minTurns: 5, label: 'Upper-Intermediate' },
+    C1: { passThreshold: 80, minTurns: 6, label: 'Advanced' },
+    C2: { passThreshold: 85, minTurns: 7, label: 'Mastery' },
+  };
+
+  const currentLevel = (student?.cefrLevel || 'A1').toUpperCase();
+  const levelConfig = CEFR_CONFIG[currentLevel] || CEFR_CONFIG.A1;
+
   const MAX_TURNS = 9999;
   const RESULT_METRICS = ['Grammar', 'Accuracy'];
   const T = amharic ? AM : EN;
@@ -640,7 +652,16 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
         })
       });
       const saveData = await saveRes.json();
-      setOutcome({ passed: saveData.passed, nextLesson: saveData.nextLesson, levelComplete: saveData.levelComplete });
+      setOutcome({ 
+        passed: saveData.passed, 
+        nextLesson: saveData.nextLesson, 
+        levelComplete: saveData.levelComplete,
+        passThreshold: saveData.passThreshold || levelConfig.passThreshold,
+        minTurns: saveData.minTurns || levelConfig.minTurns,
+        userTurns: saveData.userTurns || userTurnCountRef.current,
+        turnTargetMet: saveData.turnTargetMet ?? (userTurnCountRef.current >= levelConfig.minTurns),
+        overallScore: saveData.overallScore
+      });
       if (saveData.levelComplete) setShowTestPrompt(true);
 
       const updatedStudent = {
@@ -766,23 +787,42 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
     const report = getReport();
     const overallScore = getOverallScore(report);
     const totalQuestions = report.metrics[0]?.totalQuestions || 0;
+    const passThreshold = outcome?.passThreshold || levelConfig.passThreshold;
+    const minTurns = outcome?.minTurns || levelConfig.minTurns;
+    const hasPassed = outcome ? outcome.passed : (overallScore !== null && overallScore >= passThreshold);
+    const turnsMet = outcome?.turnTargetMet ?? (userTurnCountRef.current >= minTurns);
     return (
       <div className="assessment-shell">
         <div className="assessment-content">
           {/* Overall score banner */}
           {overallScore !== null && (
-            <div style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem', borderRadius: '16px', background: overallScore >= 60 ? '#ecfdf5' : '#fef2f2', border: `1px solid ${overallScore >= 60 ? '#10b981' : '#ef4444'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ 
+              marginBottom: '1.25rem', 
+              padding: '1rem 1.25rem', 
+              borderRadius: '16px', 
+              background: hasPassed ? '#ecfdf5' : '#fef2f2', 
+              border: `1px solid ${hasPassed ? '#10b981' : '#ef4444'}`, 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between' 
+            }}>
               <div>
-                <div style={{ fontWeight: '800', fontSize: '1.1rem', color: overallScore >= 60 ? '#065f46' : '#991b1b' }}>
-                  {outcome?.passed ? T.passed : T.notYet}
+                <div style={{ fontWeight: '800', fontSize: '1.1rem', color: hasPassed ? '#065f46' : '#991b1b' }}>
+                  {hasPassed ? T.passed : T.notYet}
                 </div>
-                <div style={{ fontSize: '0.85rem', color: overallScore >= 60 ? '#059669' : '#dc2626', marginTop: '2px' }}>
-                  {overallScore >= 60 ? T.canAdvance : T.passRequirement}
+                <div style={{ fontSize: '0.85rem', color: hasPassed ? '#059669' : '#dc2626', marginTop: '2px' }}>
+                  {hasPassed ? T.canAdvance : (
+                    !turnsMet
+                      ? (typeof T.turnsRequirement === 'function' ? T.turnsRequirement(minTurns, outcome?.userTurns ?? userTurnCount) : `Need at least ${minTurns} turns`)
+                      : (typeof T.passRequirement === 'function' ? T.passRequirement(passThreshold, currentLevel) : `${passThreshold}% score required to pass ${currentLevel}`)
+                  )}
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '2rem', fontWeight: '900', color: overallScore >= 60 ? '#10b981' : '#ef4444', lineHeight: 1 }}>{overallScore}%</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>{T.overallScore}</div>
+                <div style={{ fontSize: '2rem', fontWeight: '900', color: hasPassed ? '#10b981' : '#ef4444', lineHeight: 1 }}>{overallScore}%</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {T.overallScore} (Goal: {passThreshold}%)
+                </div>
               </div>
             </div>
           )}
@@ -1037,8 +1077,20 @@ function Session({ student, customLesson, amharic, onViewDashboard, onSessionCom
               <span>{tutorVoiceGender === 'female' ? '👩 Hamen' : '👨 Simon'}</span>
               <span style={{ fontSize: '0.7rem', opacity: 0.75 }}>⇄</span>
             </button>
-            <div style={{ fontSize: '0.8rem', fontWeight: '700', color: userTurnCount >= MAX_TURNS ? '#ef4444' : 'var(--text-muted)' }}>
-              {T.turnLimit}: {userTurnCount} / {MAX_TURNS === 9999 ? '∞' : MAX_TURNS}
+            <div style={{ 
+              fontSize: '0.8rem', 
+              fontWeight: '700', 
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 10px',
+              borderRadius: '8px',
+              border: userTurnCount >= levelConfig.minTurns ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+              backgroundColor: userTurnCount >= levelConfig.minTurns ? '#ecfdf5' : '#f8fafc',
+              color: userTurnCount >= levelConfig.minTurns ? '#15803d' : 'var(--text-muted)'
+            }}>
+              <span>{userTurnCount >= levelConfig.minTurns ? '✓' : '💬'}</span>
+              <span>Turns: {userTurnCount} / {levelConfig.minTurns} min ({currentLevel})</span>
             </div>
           </div>
           <button onClick={onViewDashboard} style={{ background: '#f1f5f9', color: '#64748b', padding: '6px 14px', borderRadius: '8px', border: 'none', fontWeight: '700', cursor: 'pointer', fontSize: '0.85rem' }}>{T.exitSession}</button>
